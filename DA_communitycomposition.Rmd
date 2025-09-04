@@ -1,0 +1,924 @@
+---
+title: "DA_communitycomposition"
+author: "Lieke"
+date: "2024-06-20"
+output: html_document
+---
+
+```{r packages}
+# general
+library(tidyverse)
+# dissimilarity matrix, NMDS, PERMANOVA, PERMDISP
+library(vegan)
+#library(MicEco) #to calculate omega2
+# models
+library(glmmTMB)
+library(mgcv) 
+# visualisation
+library(patchwork)
+library(gratia) # for drawing contour plots from GAM
+library(ggforce) # for NMDS amoebae
+library(flextable)
+library(gridExtra) # for grid.arrange
+library(report)
+library(phyloseq)
+library(fantaxtic)
+library(cowplot)
+library(ggnested)
+library(metR) # for geom_text_contour
+landusetypes <- c("Food_forest", "Forest", "Grassland", "Arable_field")
+```
+
+```{r functions}
+source("functions.R")
+
+# for making the plot of ordisurf prettier in ggplot
+extract.xyz <- function(obj) {
+    xy <- expand.grid(x = obj$grid$x, y = obj$grid$y)
+    xyz <- cbind(xy, c(obj$grid$z))
+    names(xyz) <- c("x", "y", "z")
+    return(xyz)
+}
+```
+
+```{r data}
+dmlist <- readRDS("dmlist.rds")
+avgdissimlist <- readRDS("avgdissimlist.rds")
+
+codes_info <- read.csv("Data/codes_info.csv")
+sites_info <- codes_info %>%
+  select(site, location, landuse) %>%
+  distinct()
+
+bblist_avgdissim <- readRDS("bblist_avgdissim.rds")
+
+# read in data used for stacked bars taxonomy
+taxon_macroarthropods <- readRDS("taxon_macroarthropods.rds")
+taxon_earthworms <- readRDS("taxon_earthworms.rds")
+
+# read in environmental (soil property) data
+chemphys <- read.csv("Data/chemphys_P2.csv")
+
+# read in NMDS results
+NMDSreslist <- readRDS("NMDSreslist.rds")
+```
+
+```{r grouporder}
+grouporder <- c("bacteria", "fungi", "protists", 
+                "nematodes","microarthropods",  
+                "macroarthropods", "earthworms")
+                
+grouporder_total <- c(grouporder,
+                      "springtails", "mites",
+                      "isopods", "millipedes","centipedes",
+                      "harvestmen", "carabids")
+```
+
+# Hypothesis 3
+
+## PERMDISP and PERMANOVA
+
+### 3 betadispers
+
+```{r PERMDISP}
+# first for groups considered in main (pooled microarthropods and pooled macroarthropods)
+# but also for separate groups
+
+betadisper_output <- data.frame()
+dmlist <- dmlist[grouporder_total]
+
+for(m in names(dmlist)){
+  set.seed(2983847)
+  df <- as.matrix(dmlist[[m]])
+  rn <- data.frame(code = rownames(df)) %>%
+    left_join(codes_info %>% select(code, landuse, location))
+  
+  n_obs <- rn %>%
+    group_by(landuse) %>%
+    summarise(n = n()) %>%
+    # now already remove land use type for which there are less than 6 observations
+    filter(n >= 6)
+
+  for(l in setdiff(n_obs$landuse, "Food_forest")){ # only for those reference land use types with >= 6 obs.
+    dissim <- rn %>%
+        filter(landuse %in% c("Food_forest",l)) %>%
+        pull(code) %>%
+      { df[.,.] } %>%
+      as.dist()
+    dissim_info <- rn %>% filter(landuse=="Food_forest"|landuse==l)
+    disper_lu <- betadisper(dissim, dissim_info$landuse, type="centroid")
+    FF <- round(disper_lu$group.distances[["Food_forest"]], digits=2)
+    CON <- round(disper_lu$group.distances[[l]], digits=2)
+    F_lu <- format(round(permutest(disper_lu)$tab$`F`[1], 
+                         digits = 1))
+    p_lu <- p.adjust(permutest(disper_lu)$tab$`Pr(>F)`[1],
+                     method="holm", n = nrow(n_obs) - 1) # the number of comparisons made (FF vs ...)
+    disper_loc <- betadisper(dissim, dissim_info$location, type="centroid")
+    F_loc <- round(permutest(disper_loc)$tab$`F`[1], digits = 1)
+    p_loc <- p.adjust(permutest(disper_loc)$tab$`Pr(>F)`[1], 
+                      method="holm", n = nrow(n_obs) - 1) # idem above
+    
+    output <- cbind(group = m, 
+                    contrast = l,
+                    n_FF = n_obs %>% filter(landuse == "Food_forest") %>% pull(),
+                    n_CON = n_obs %>% filter(landuse == l) %>% pull(),
+                    F_loc, p_loc, FF, CON, F_lu, p_lu
+                    )
+    betadisper_output <- rbind(betadisper_output, output)
+      }
+}
+
+
+flextable(betadisper_output)
+write.csv(betadisper_output, "PERMDISP_output.csv")
+```
+
+Based on the results of the PERMDISP, we can perform all PERMANOVAs for the main groups. In a few cases there is the combination of a difference in the number of observations and dispersion between the two land use types, but then the dispersion is always greater in the group with the highest number of observations (FF), so there is a conservative bias, and yet we still detect differences, so OK; see supplement.
+
+For the separate arthropod groups, there was never a statistically clear difference in dispersion between FF and the reference land use type, so all according separate PERMANOVAs can be conducted.
+
+### 3 permanovas
+
+```{r PERMANOVA}
+permanova_output <- data.frame()
+
+for(m in names(dmlist)){
+  set.seed(2983847)
+  df <- as.matrix(dmlist[[m]])
+  rn <- data.frame(code = rownames(as.matrix(df))) %>%
+    left_join(codes_info %>% select(code, landuse, location))
+  
+  n_obs <- rn %>%
+    group_by(landuse) %>%
+    summarise(n = n()) %>%
+    # now already remove land use type for which there are less than 6 observations
+    filter(n >= 6)
+
+  for(l in setdiff(n_obs$landuse, "Food_forest")){ # only for those reference land use types with >= 6 obs.
+      dissim <- rn %>%
+          filter(landuse %in% c("Food_forest",l)) %>%
+          pull(code) %>%
+            { df[.,.] }
+      dissim_info <- rn %>% filter(landuse=="Food_forest"|landuse==l)
+      
+      results <- adonis2(dissim ~ location + landuse, 
+                          data = dissim_info, by="terms")
+      
+      results_loc <- results[1,] %>%
+        rename("p" = "Pr(>F)",
+               "pseudo_F" = "F") %>%
+        mutate(df = paste0(Df, ", ", results[4,1]),
+               p_adj = p.adjust(p, method = "holm", n = nrow(n_obs) - 1)) %>%
+        select(df, pseudo_F, p_adj, R2)
+      
+      results_lu <- results[2,] %>%
+        rename("p" = "Pr(>F)",
+               "pseudo_F" = "F") %>%
+        mutate(df = paste0(Df, ", ", results[4,1]),
+               p_adj = p.adjust(p, method = "holm", n = nrow(n_obs) - 1)) %>%
+        select(df, pseudo_F, p_adj, R2)
+      
+      output <- rbind(results_loc, results_lu) %>%
+        rownames_to_column("term") %>%
+        mutate(group = m,
+               contrast = l,
+               .before = "term")
+      
+      permanova_output <- rbind(permanova_output, round_df(output,digits=3))
+
+    }
+  
+}
+ 
+flextable(permanova_output)
+write.csv(permanova_output, "PERMANOVA_output.csv")
+```
+
+## NMDS
+
+```{r NMDS}
+# list to save plots in
+NMDS_plots <- list()
+
+# list to save results in
+NMDSreslist <- list() # will be chill to have this saved instead of having to rerun nmds all the time
+
+for(m in names(dmlist[grouporder])){
+  df <- dmlist[[m]]
+  set.seed(2983847)
+  NMDS_res <- metaMDS(df, k=2, trymax = 999, trace = FALSE) 
+  # autotransform by default TRUE
+  
+  p <- myNMDS(df, NMDS_res, codes_info) + 
+    # temporary for figure
+    labs(x = "NMDS1", y = "NMDS2")
+  
+  NMDS_plots[[m]] <- p
+  
+  NMDSreslist[[m]] <- NMDS_res
+
+}
+
+saveRDS(NMDSreslist, "NMDSreslist.rds")
+# (NMDSplot <- do.call("grid.arrange", c(NMDS_plots, ncol = 3)))
+(NMDSplot <- do.call("plot_grid", c(NMDS_plots, ncol=3, align="hv")))
+ggsave("NMDSplot_height17.png", NMDSplot, width = 16, height = 16.5)
+ggsave("NMDSplot_height17.svg", NMDSplot, width = 16, height = 17)
+
+## separately for separate arthropod groups
+## PERMANOVA only if at least 6 observations per land use type > for now also only these on NMDS
+## comparison with forests possible for all groups
+## comparison with grassland only possible for springtails, mites, isopods and carabids
+## comparison with arable only possible for springtails and carabids
+
+NMDS_plots_sep <- list()
+
+for(m in c("springtails", "mites",
+           "isopods", "centipedes", "millipedes",
+           "harvestmen", "carabids")){
+  set.seed(2983847)
+  df <- as.matrix(dmlist[[m]])
+
+  rn <- data.frame(code = rownames(df)) %>%
+    left_join(codes_info %>% select(code, landuse, location))
+  
+  # count number of observations per land use type
+  n_obs <- rn %>%
+    group_by(landuse) %>%
+    summarise(n = n()) %>%
+    # now already remove land use type for which there are less than 6 observations
+    filter(n >= 6)
+  
+  # filter out rownames (and column names) of land use type with too few observations
+  rn <- rn %>%
+    filter(landuse %in% n_obs$landuse)
+  
+  df <- df[rn$code, rn$code]
+
+    
+  p <- myNMDS(df, codes_info) + 
+    # temporary for figure
+    labs(x = "NMDS1", y = "NMDS2")
+  
+  NMDS_plots_sep[[m]] <- p
+
+}
+
+
+
+(NMDSplot_sep <- do.call("grid.arrange", c(NMDS_plots_sep, ncol = 3)))
+# ggsave("NMDSplot_sep.svg", NMDSplot_sep, width = 16, height = 16)
+```
+
+```{r legend}
+legend <- ggpubr::get_legend(p)
+as_ggplot(legend)
+```
+
+```{r NMDS fit}
+#Check the stress and fit of the nematodes NMDS following https://uw.pressbooks.pub/appliedmultivariatestatistics/chapter/nmds/
+df <- dmlist[["nematodes"]]
+NMDS_res <- metaMDS(df, k=2, trymax = 999, trace = FALSE) 
+fit <- goodness(NMDS_res)
+NMDS_res$stress
+plot(NMDS_res, display = "sites", type = "none")
+points(NMDS_res, display = "sites", cex = 2*fit/mean(fit)) #for nematodes mostly driven by few samples?
+stressplot(NMDS_res) #Shephard plot..large scatter indicates issues
+```
+
+## ordisurf & GAM
+
+Here, we use ordisurf to explore potential relationships between key soil properties and variation in soil community composition as represented in the ordination.
+We evaluate a) if the soil property under consideration displays a statistically clear (p < 0.05) relationship with the ordination (the data scores of the plots); b) if this relationship is sufficiently close to a linear relationship so that it would be acceptable to plot it as a vector on the NMDS (which can be done using the envfit function), or if the relationship is not linear and we should rather show the plot generated by ordisurf (a contour plot).
+
+Note that: "The fitted GAM is a regression model and has the usual assumptions of such models. Of particular note is the assumption of independence of residuals. If the observations are not independent (e.g. they are repeat measures on a set of objects, or from an experimental design, inter alia) do not trust the p-values from the GAM output."
+In our case, this means that it is suboptimal to not include the location random effect here (spatial correlation).
+Therefore, we also make our own GAM, in which we include the location random effect
+
+also see https://fromthebottomoftheheap.net/2011/06/10/what-is-ordisurf-doing/
+and https://fromthebottomoftheheap.net/2021/02/02/random-effects-in-gams/
+
+```{r NMDS ordisurf_GAM}
+# df for model summaries
+modeloutput_ordisurf_GAM <- data.frame()
+
+# plotlist for contour plots 
+ordisurfplots <- list()
+gamplots <- list()
+
+# for plotting, values for each of five soil properties to use as binwidth
+binwidths <- data.frame(group = rep(c("bacteria", "fungi", "protists",
+                                  "nematodes","microarthropods", "earthworms"), each = 5),
+                        property = rep(c("bulkdensity", "pH_KCl", "C_total", "N_total", "P_total"), times = 6),
+                        bin_g = c(rep(c(0.05, 0.2, 0.1, 0.01, 100), times = 5), # can play around with this a bit still
+                                  c(0.02,0.01,0.05,0.005,10))) # different for earthworms at least
+
+# cleanly collect output from ordisurf and GAM runs - not for macroarthropods
+for(m in c("bacteria", "fungi", "protists", 
+            "nematodes","microarthropods",  
+            "earthworms")){
+  df <- dmlist[[m]]
+  
+  NMDS_res <- NMDSreslist[[m]]
+  
+  scores <- data.frame(scores(NMDS_res, display = "sites", scaling = 3)) 
+    
+  env <- data.frame(code = rownames(scores)) %>%
+    left_join(chemphys %>% select(code, location, landuse,
+                                  bulkdensity, pH_KCl, C_total, N_total, P_total), by = "code") %>%
+    mutate(location = factor(location),
+           landuse = factor(landuse, levels = c("Food_forest", "Forest",
+                                                "Grassland", "Arable_field"))) %>%
+    cbind(scores) %>% # this is OK, correct, codes match rownames, so correct environmental data bound with scores
+    # make longer to enable loop below - but then rownames disappear, so keep column code and move to rownames in loop
+    pivot_longer(cols = c(bulkdensity, pH_KCl, C_total, N_total, P_total),
+                 names_to = "property")
+
+  # fit and add 2d surface using ordisurf (simple GAM) and fit GAM with location RE for each of the separate soil properties
+  for(g in c("bulkdensity", "pH_KCl", "C_total", "N_total", "P_total")){
+    
+    # pick soil property
+    env_g <- env %>%
+      filter(property == g) %>%
+      #column_to_rownames(var = "code") %>%
+      mutate(z = NA) # necessary later on for plotting
+    
+    # pick conditional binwidth
+    bin_g <- binwidths %>% filter(group == m & property == g) %>% pull(bin_g)
+    
+    # ordisurf
+    surf <- ordisurf(NMDS_res ~ value, data = env_g, 
+                     method = "REML", 
+                     select = TRUE) 
+    
+    # GAM with location RE
+    gam_RE <- gam(value ~ s(NMDS1, NMDS2, k=10, bs="tp", fx = FALSE) + s(location, bs = "re"), 
+                  data = env_g, 
+                  family = Gamma(link = "log"),
+                  method = "REML",
+                  select = TRUE)
+    
+    # save output we just select the p-values from the output of the gam here
+    output <- data.frame(group = m,
+                         property = g,
+                         p_ordisurf = round(summary(surf)$s.table[,4], 3), # this extracts the p-value (fourth column)
+                         p_GAM_RE = round(summary(gam_RE)$s.table[1,4], 3), # this extracts p-value for s(NMDS1, NMDS2)
+                         p_GAM_RE_location = round(summary(gam_RE)$s.table[2,4], 3),
+                         R2_adj_GAM_RE = round(summary(gam_RE)$r.sq,3)) 
+    
+    modeloutput_ordisurf_GAM <- rbind(modeloutput_ordisurf_GAM, output)
+    
+    # make pretty plot for GAM with RE
+    
+    ## predict with tidygam
+    x2 <- as.data.frame(predict_gam(gam_RE, length_out = 50, tran_fun = exp)) %>% 
+      # higher length_out is smoother contours
+      rename(z = names(.)[4]) %>%
+      mutate(z = as.vector(z)) # for some reason this was a matrix instead of a vector, hence the [ ,1]
+    
+    ## plot
+    p <- ggplot() + 
+      geom_point(data = env_g, aes(x = NMDS1, y = NMDS2, colour = landuse)) + 
+      scale_colour_manual(values = c("#56B4E9", "#D55E00","#009E73", "#F0E442")) +
+      stat_contour(data = x2, aes(x=NMDS1, y=NMDS2, z=z), binwidth = bin_g) + # maybe make lines a bit thicker still 
+      geom_text_contour(data = x2, aes(x=NMDS1, y=NMDS2, z=z), vjust=+2, 
+                        check_overlap = TRUE, size = 3,
+                        skip = 0, binwidth = bin_g) + # may want to skip = 1 if we have many lines
+      coord_equal() +
+        labs(#title = g,
+             x = "NMDS1", y = "NMDS2") + 
+        theme_minimal(base_size = 16) +
+        theme(legend.position = "none",
+              panel.grid.major = element_line(size = 0.5), 
+              panel.grid.minor = element_line(size = 0.5),
+              panel.border = element_rect(colour = "black", 
+                                          fill = NA, size = 0.5))
+     
+    gamplots[[m]][[g]] <- p
+
+  }
+
+} 
+
+# write.csv(modeloutput_ordisurf_GAM, "modeloutput_ordisurf_GAM.csv")
+# saveRDS(ordisurfplots, "ordisurfplots.rds")
+# saveRDS(gamplots, "gamplots.rds")
+p1 <- wrap_plots(gamplots[["bacteria"]], ncol = 5)
+p2 <- wrap_plots(gamplots[["fungi"]], ncol = 5)
+p3 <- wrap_plots(gamplots[["protists"]], ncol = 5)
+p4 <- wrap_plots(gamplots[["nematodes"]], ncol = 5)
+p5 <- wrap_plots(gamplots[["microarthropods"]], ncol = 5)
+p6 <- wrap_plots(gamplots[["earthworms"]], ncol = 5) # pH for now doesn't want to show
+
+pup <- wrap_plots(p1, p2, p3, nrow = 3)
+plow <- wrap_plots(p4, p5, p6, nrow = 3)
+ggsave("gamplots_up.png", pup, width = 500, height = 350, unit ="mm", dpi = 100) # should later be 600
+ggsave("gamplots_low.png", plow, width = 500, height = 350, unit ="mm", dpi = 100)
+
+# test to look into cutoff for visualisation
+test <- modeloutput_ordisurf_GAM %>%
+  filter(p_GAM_RE < 0.05 & R2_adj_GAM_RE > 0.6)
+
+# OK, so now almost all are significant
+# saveRDS(ordisurfplots, "ordisurfplots.rds")
+# ordisurfplots <- readRDS("ordisurfplots.rds")
+# compare ordisurf plots and gam with re plots
+
+```
+
+## Taxonomy
+
+```{r taxonomy_bars}
+ps_bact <- readRDS("Phyloseq_files/ps_bacteria.RDS")
+ps_non_am_fun <- readRDS("Phyloseq_files/ps_nonamfungi.RDS")
+ps_pro <- readRDS("Phyloseq_files/ps_protists.RDS")
+ps_nema <- readRDS("Phyloseq_files/ps_nematodes.RDS")
+ps_microarthr <- readRDS("Phyloseq_files/ps_microarthropods.RDS")
+taxon_macroarthropods <- readRDS("taxon_macroarthropods.rds")
+taxon_earthworms <- readRDS("taxon_earthworms.rds")
+more_site_info <- read_csv2("Phyloseq_files/more_site_info.csv")
+
+#colors
+# tol10qualitative=c("#332288", "#88CCEE", "#44AA99", "#117733", "#999933", "#DDCC77", "#661100", "#CC6677", "#882255", "#AA4499")
+test <- c("#0C7BDC", "#FFC20A","#40B0A6","#5D3A9B","#FEFE62","#DC3220","#1AFF1A","#D35FB7","#994F00","#88CCEE")
+
+#theme
+set_theme <- list(
+  theme_bw(),
+  theme(panel.grid = element_blank(),
+        strip.background.x = element_blank(), 
+        strip.placement = "outside",
+        axis.line = element_line(),
+        axis.text.x = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.ticks.length.x = unit(0, "pt"),
+        panel.border = element_blank(),
+        panel.spacing.x = unit(7, "pt"), # does what it implies, space the panels of the facet 
+        panel.grid.major.x = element_blank(),
+        axis.text = element_text(size = 14),
+        axis.title.y = element_text(size = 14),
+        strip.text.x = element_text(size = 14))#,
+        # legend.text = element_text(size = 13), 
+        # legend.title = element_text(size = 14))
+)
+```
+
+```{r taxonomy_bact}
+#Bacteria
+sdf <- data.frame(sample_data(ps_bact))
+sdf <- sdf %>% left_join(select(more_site_info, code, site), by = "code")
+sample_data(ps_bact)$unique_site <- sdf$site
+sample_data(ps_bact)$unique_site <- as.factor(sample_data(ps_bact)$unique_site)
+
+#site metadata
+site_meta <- sample_data(ps_bact) %>%
+  as.data.frame() %>%
+  group_by(unique_site) %>%
+  summarise_all(~ unique(.)[1]) %>%
+  select(unique_site, landuse)
+site_meta <- sample_data(site_meta)
+rownames(site_meta) <- site_meta$unique_site
+
+#merge per site
+ps_site <- merge_samples(ps_bact, "unique_site", fun=mean)
+sample_data(ps_site) <- sample_data(site_meta)
+sample_data(ps_site)$landuse <- factor(sample_data(ps_site)$landuse,
+                                       levels=c("Food_forest","Forest","Grassland","Arable_field"))
+top_nested <- nested_top_taxa(ps_site,
+                              top_tax_level = "Phylum",
+                              nested_tax_level = "Class",
+                              n_top_taxa = 10, 
+                              n_nested_taxa = 3)
+(nb <- plot_nested_bar(ps_obj = top_nested$ps_obj,
+                top_level = "Phylum",
+                nested_level = "Class",
+                palette=test,
+                legend_title = "Phylum and classes") +
+  scale_x_discrete(expand = expansion(add = .8)) +
+  facet_grid(.~ landuse, switch = "x", space = "free_x", scales = "free_x",
+             labeller = labeller(landuse = c("Food_forest" = "Food forest",
+                                             "Forest" = "Forest",
+                                             "Grassland" = "Grassland",
+                                             "Arable_field" = "Cropland"))) +
+  labs(x = "Land use", y = "Mean relative abundance") +
+  guides(fill = guide_legend(ncol = 2)) +
+  set_theme + theme(legend.position = "right"))
+ggsave("bact_tax.png",nb, width = 300, height = 200, unit="mm", dpi=600)
+# leg <- get_legend(nb)
+# (cow <- cowplot::plot_grid(nb_no_leg, leg, ncol=2, rel_widths = c(2, 1)))
+# ggsave("bact_try.png", cow, width = 300, height = 150, unit="mm", dpi=600)
+```
+
+```{r taxonomy_fun}
+#Non-AM fungi
+sdf <- data.frame(sample_data(ps_non_am_fun))
+sdf <- sdf %>% left_join(select(more_site_info, code, site), by = "code")
+sample_data(ps_non_am_fun)$unique_site <- sdf$site
+sample_data(ps_non_am_fun)$unique_site <- as.factor(sample_data(ps_non_am_fun)$unique_site)
+
+#site metadata
+site_meta <- sample_data(ps_non_am_fun) %>%
+  as.data.frame() %>%
+  group_by(unique_site) %>%
+  summarise_all(~ unique(.)[1]) %>%
+  select(unique_site, landuse)
+site_meta <- sample_data(site_meta)
+rownames(site_meta) <- site_meta$unique_site
+
+#merge per site
+ps_site <- merge_samples(ps_non_am_fun, "unique_site", fun=mean)
+sample_data(ps_site) <- sample_data(site_meta)
+sample_data(ps_site)$landuse <- factor(sample_data(ps_site)$landuse,
+                                       levels=c("Food_forest","Forest","Grassland","Arable_field"))
+top_nested <- nested_top_taxa(ps_site,
+                              top_tax_level = "Phylum",
+                              nested_tax_level = "Class",
+                              n_top_taxa = 10, 
+                              n_nested_taxa = 3)
+(nb <- plot_nested_bar(ps_obj = top_nested$ps_obj,
+                top_level = "Phylum",
+                nested_level = "Class",
+                palette=test,
+                legend_title = "Phylum and classes") +
+  scale_x_discrete(expand = expansion(add = .8)) +
+  facet_grid(.~ landuse, switch = "x", space = "free_x", scales = "free_x",
+             labeller = labeller(landuse = c("Food_forest" = "Food forest",
+                                             "Forest" = "Forest",
+                                             "Grassland" = "Grassland",
+                                             "Arable_field" = "Cropland"))) +
+  labs(y = "Mean relative abundance") +
+  guides(fill = guide_legend(ncol = 2)) +
+  set_theme + theme(legend.position = "right"))
+ggsave("fun_tax.png",nb, width = 300, height = 200, unit="mm", dpi=600)
+# leg <- get_legend(nb)
+# (cow <- cowplot::plot_grid(nb_no_leg, leg, ncol=2, rel_widths = c(2, 1)))
+# ggsave("fun_try.png", cow, width = 400, height = 150, unit="mm", dpi=600)
+```
+
+```{r taxonomy_pro}
+#Protists
+sdf <- data.frame(sample_data(ps_pro))
+sdf <- sdf %>% left_join(select(more_site_info, code, site), by = "code")
+sample_data(ps_pro)$unique_site <- sdf$site
+sample_data(ps_pro)$unique_site <- as.factor(sample_data(ps_pro)$unique_site)
+
+#site metadata
+site_meta <- sample_data(ps_pro) %>%
+  as.data.frame() %>%
+  group_by(unique_site) %>%
+  summarise_all(~ unique(.)[1]) %>%
+  select(unique_site, landuse)
+site_meta <- sample_data(site_meta)
+rownames(site_meta) <- site_meta$unique_site
+
+#merge per site
+ps_site <- merge_samples(ps_pro, "unique_site", fun=mean)
+sample_data(ps_site) <- sample_data(site_meta)
+sample_data(ps_site)$landuse <- factor(sample_data(ps_site)$landuse,
+                                       levels=c("Food_forest","Forest","Grassland","Arable_field"))
+ps_site %>% rank_names()
+top_nested <- nested_top_taxa(ps_site,
+                              top_tax_level = "Subdivision",
+                              nested_tax_level = "Class",
+                              n_top_taxa = 10, 
+                              n_nested_taxa = 3)
+(nb <- plot_nested_bar(ps_obj = top_nested$ps_obj,
+                top_level = "Subdivision",
+                nested_level = "Class",
+                palette=test,
+                legend_title = "Subdivision and classes") +
+  scale_x_discrete(expand = expansion(add = .8)) +
+  facet_grid(.~ landuse, switch = "x", space = "free_x", scales = "free_x",
+             labeller = labeller(landuse = c("Food_forest" = "Food forest",
+                                             "Forest" = "Forest",
+                                             "Grassland" = "Grassland",
+                                             "Arable_field" = "Cropland"))) +
+  labs(y = "Mean relative abundance") +
+  guides(fill = guide_legend(ncol = 2)) +
+  set_theme + theme(legend.position = "right"))
+ggsave("protist_tax.png",nb, width = 300, height = 200, unit="mm", dpi=600)
+```
+
+```{r taxonomy_nema}
+#nematodes
+sdf <- data.frame(sample_data(ps_nema))
+sdf <- sdf %>% left_join(select(more_site_info, code, site), by = "code")
+sample_data(ps_nema)$unique_site <- sdf$site
+sample_data(ps_nema)$unique_site <- as.factor(sample_data(ps_nema)$unique_site)
+
+#site metadata
+site_meta <- sample_data(ps_nema) %>%
+  as.data.frame() %>%
+  group_by(unique_site) %>%
+  summarise_all(~ unique(.)[1]) %>%
+  select(unique_site, landuse)
+site_meta <- sample_data(site_meta)
+rownames(site_meta) <- site_meta$unique_site
+
+#merge per site
+ps_site <- merge_samples(ps_nema, "unique_site", fun=mean)
+sample_data(ps_site) <- sample_data(site_meta)
+sample_data(ps_site)$landuse <- factor(sample_data(ps_site)$landuse,
+                                       levels=c("Food_forest","Forest","Grassland","Arable_field"))
+top_nested <- nested_top_taxa(ps_site,
+                              top_tax_level = "Class",
+                              nested_tax_level = "Family",
+                              n_top_taxa = 10, 
+                              n_nested_taxa = 3)
+(nb <- plot_nested_bar(ps_obj = top_nested$ps_obj,
+                top_level = "Class",
+                nested_level = "Family",
+                palette=test,
+                legend_title = "Class and families") +
+      scale_x_discrete(expand = expansion(add = .8)) +
+      facet_grid(.~ landuse, switch = "x", space = "free_x", scales = "free_x",
+             labeller = labeller(landuse = c("Food_forest" = "Food forest",
+                                             "Forest" = "Forest",
+                                             "Grassland" = "Grassland",
+                                             "Arable_field" = "Cropland"))) +
+  labs(y = "Mean relative abundance") +
+  guides(fill = guide_legend(ncol = 2)) +
+  set_theme + theme(legend.position = "right"))
+ggsave("nema_tax.png",nb, width = 300, height = 200, unit="mm", dpi=600)
+```
+
+```{r taxonomy_microarthr}
+#Microarthropods
+sdf <- data.frame(sample_data(ps_microarthr))
+sdf <- sdf %>% rename(code = vb_code)
+sdf <- sdf %>% left_join(select(more_site_info, code, site), by = "code")
+sample_data(ps_microarthr)$unique_site <- sdf$site
+sample_data(ps_microarthr)$unique_site <- as.factor(sample_data(ps_microarthr)$unique_site)
+
+#site metadata
+site_meta <- sample_data(ps_microarthr) %>%
+  as.data.frame() %>%
+  group_by(unique_site) %>%
+  summarise_all(~ unique(.)[1]) %>%
+  select(unique_site, landuse)
+site_meta <- sample_data(site_meta)
+rownames(site_meta) <- site_meta$unique_site
+
+#merge per site
+ps_site <- merge_samples(ps_microarthr, "unique_site", fun=mean)
+sample_data(ps_site) <- sample_data(site_meta)
+sample_data(ps_site)$landuse <- factor(sample_data(ps_site)$landuse,
+                                       levels=c("Food_forest","Forest","Grassland","Arable_field"))
+top_nested <- nested_top_taxa(ps_site,
+                              top_tax_level = "Class",
+                              nested_tax_level = "Family",
+                              n_top_taxa = 10, 
+                              n_nested_taxa = 3)
+# top_nested$ps_obj@tax_table[,"Order"] <- factor(top_nested$ps_obj@tax_table[,"Order"], 
+#                                                    levels=c("Other", "Mesostigmata","Sarcoptiformes",
+#                                                             "Trombidiformes", "Entomobryomorpha", "Neelipleona",
+#                                                             "Poduromorpha", "Symphypleona"))
+(nb <- plot_nested_bar(ps_obj = top_nested$ps_obj,
+                top_level = "Class",
+                nested_level = "Family",
+                palette=test,
+                legend_title="Class and families"
+                ) +
+   scale_x_discrete(expand = expansion(add = .8)) +
+   facet_grid(.~ landuse, switch = "x", space = "free_x", scales = "free_x",
+             labeller = labeller(landuse = c("Food_forest" = "Food forest",
+                                             "Forest" = "Forest",
+                                             "Grassland" = "Grassland",
+                                             "Arable_field" = "Cropland"))) +
+  labs(y = "Mean relative abundance") +
+  guides(fill = guide_legend(ncol = 2)) +
+  set_theme + theme(legend.position = "right"))
+ggsave("microarthr_tax.png",nb, width = 300, height = 200, unit="mm", dpi=600)
+```
+
+```{r taxonomy_macroarthr}
+#macroarthropods
+(nb <- taxon_macroarthropods %>% 
+  left_join(sites_info) %>%
+  mutate(landuse = factor(landuse, levels = c("Food_forest", "Forest",
+                                              "Grassland", "Arable_field"))) %>%
+ ggnested(aes(x = site, y = mean_quant, main_group = class, sub_group = family),
+         main_palette=test) +
+  geom_col(position = position_fill(reverse = TRUE)) + # colour = "black"
+  # 0 at level 0 of y axis
+  scale_y_continuous(expand = expansion(mult = c(0, .05))) + #, labels = scales::percent
+  # add padding around outer bars
+  scale_x_discrete(expand = expansion(add = .8)) +
+  labs(y = "Proportion of captured individuals",
+       fill = "Genus") +
+  facet_grid(.~ landuse, switch = "x", space = "free_x", scales = "free_x",
+             labeller = labeller(landuse = c("Food_forest" = "Food forest",
+                                             "Forest" = "Forest",
+                                             "Grassland" = "Grassland",
+                                             "Arable_field" = "Cropland"))) +
+  guides(fill = guide_legend(ncol = 2)) +
+  set_theme + theme(legend.position = "right"))
+ggsave("macroarthr_tax.png",nb, width = 300, height = 200, unit="mm", dpi=600)
+```
+
+```{r taxonomy_ew}
+#earthworms
+(nb <- taxon_earthworms %>% 
+  left_join(sites_info) %>%
+  mutate(landuse = factor(landuse, levels = c("Food_forest", "Forest",
+                                              "Grassland", "Arable_field"))) %>%
+  # filter out empty samples, otherwise get empty bars
+  filter(mean_quant > 0) %>%
+ggnested(aes(x = site, y = mean_quant, main_group = genus, sub_group = species),
+         main_palette=test) +
+  geom_col(position = position_fill(reverse = TRUE)) + # colour = "black"
+  # 0 at level 0 of y axis
+  scale_y_continuous(expand = expansion(mult = c(0, .05))) + #, labels = scales::percent
+  # add padding around outer bars
+  scale_x_discrete(expand = expansion(add = .8)) +
+  labs(y = "Proportion of captured individuals")+
+  facet_grid(.~ landuse, switch = "x", space = "free_x", scales = "free_x",
+             labeller = labeller(landuse = c("Food_forest" = "Food forest",
+                                             "Forest" = "Forest",
+                                             "Grassland" = "Grassland",
+                                             "Arable_field" = "Cropland"))) +
+  guides(fill = guide_legend(ncol = 2)) +
+  set_theme + theme(legend.position = "right"))
+ggsave("ew_tax.png",nb, width = 300, height = 200, unit="mm", dpi=600)
+```
+
+
+## Indicator species analysis? 
+For now we're not including this for the paper, but it is easy and fun, gives interesting results that make the findings a bit more tangible and ecologically interpretable and hint at the importance of looking at the identity and ecology of the species.
+
+# Hypothesis 4
+
+So, in this section of the results, we only look at within-site dissimilarity.
+We look at average pairwise dissimilarity rather than multisite dissimilarity. This is due to methodological constraints, because we wanted to use "rarefied dissimilarities" for the sequencing data. Thus, we here use the dissimilarity matrices that have been produced (or read) upstream and have been used for NDMS, PERMANOVA and PERMDISP.
+
+See "Model_diagnostics_community_composition.Rmd" for the checks of the model assumptions.
+The bootstrapping is done as for other models (see "bootstrap_approach.R").
+
+As the Bray-Curtis dissimilarity is bound between 0 and 1, we use a beta regression. However, in some cases this dissimilarity is equal to 0 or 1. We chose to respond to this by using a transformation of the dissimilarity following Smithson and ... (2006). We did consider using an approach for a mixture distribute, with three separate models, but ultimately deemed this approach of transformation more useful and perhaps not that problematic (because perhaps no qualitative difference between dissimilarity of 1 and 0.99 in this case where we look at within-site dissimilarity and could in fact expect it to be possible that there would be at least some species (e.g. of these mobile species groups) occurring in both traps/more than 1 plot)
+
+## Plotting
+
+```{r avgdissim_plot}
+# list for storing plots and dataframe for storing total model summary
+avgdissim_plots <- list()
+avgdissim_modelsumm <- data.frame()
+
+# dataframe for storing estimates of dispersion coefficients
+dispcoeff <- data.frame()
+
+for (m in c("bacteria", "fungi", "protists",
+            "nematodes",
+            "microarthropods",
+            "macroarthropods",
+            "earthworms")){ # not doing it for separate microarthropod and macroarthropod groups
+  
+  # Prepare dataframe
+  ## Transform to fit (0,1) (barely changes the values) and make landuse factor
+  df <- avgdissimlist[[m]] %>%
+      mutate(avgdissim_transf = (avg_pairwise_dissim * (length(avg_pairwise_dissim) - 1)
+                                    + 0.5)/length(avg_pairwise_dissim),
+             landuse = factor(landuse, levels = c("Food_forest", "Forest", 
+                                                "Grassland", "Arable_field"))) %>%
+  ## Removing land use type for which there are less than 6 observations 
+      na.omit() %>%
+      group_by(landuse) %>%
+      filter(n() >= 6) %>%
+      ungroup()
+
+  # model
+  fitted_model <- glmmTMB(avgdissim_transf ~ landuse,
+                     family = beta_family(),
+                     data = df)
+  
+  
+  # put dispersion coefficient in dataframe
+  dispcoeff <- rbind(dispcoeff, data.frame(Group = m,
+                                           Dispersion = round(sigma(fitted_model), 
+                                                              digits = 2)))
+  # process bootstrap values 
+  # to obtain 95%CIs of means response scale and p-values
+  bb <- bblist_avgdissim[[m]]
+  
+  ## make dataframe from bootstrap estimates, 
+  ## with landuse means and differences in logit scale
+  bb_df_logit <- as.data.frame(bb[["t"]]) %>%
+    # rename columns
+    rename("Food_forest_mean" = "(Intercept)") %>%
+    rename_with(.fn = ~ gsub("landuse", "diff_",.x), starts_with("landuse")) %>% 
+    # add column with means of reference landuses, by adding their estimated difference to the estimated mean of the food forest
+    # some land use types were excluded, so takes this into account
+    mutate(Forest_mean = if("diff_Forest" %in% names(.)) {
+      Food_forest_mean + diff_Forest} else NULL,
+           Grassland_mean = if("diff_Grassland" %in% names(.)) {
+             Food_forest_mean + diff_Grassland} else NULL,
+           Arable_field_mean = if("diff_Arable_field" %in% names(.)) {
+             Food_forest_mean + diff_Arable_field} else NULL,
+           .after = "Food_forest_mean")
+
+  ## make dataframe with landuse means in response scale
+  bb_df_response <- bb_df_logit %>%
+    select(ends_with("mean")) %>%
+    # fist reverse the Smithson and Verkuilen transformation
+    mutate(across(everything(), ~ ((.) * length(df$avg_pairwise_dissim) - 0.5)/(length(df$avg_pairwise_dissim) - 1))) %>%
+    # back-transform from logit
+    mutate(across(everything(), ~ exp(.) / (1 + exp(.))))
+
+  
+  ## obtain CIs for model estimated means for plotting
+  ## we plot the model estimated mean and make the CI around this by using the SD obtained from the parametric bootstrapping 
+  
+  mean_boot_sd <- bb_df_response %>%
+    pivot_longer(names_to = "landuse", names_pattern = "(.*)_mean",
+                 cols = ends_with("mean")) %>%
+    group_by(landuse) %>%
+    reframe(boot_sd = sd(value))
+  
+  estimates_response <- data.frame(model_estimate = fixef(fitted_model)[["cond"]]) %>% 
+    rownames_to_column(var = "landuse") %>%
+    # change landuse names
+    mutate(landuse = case_when(landuse == "(Intercept)" ~ "Food_forest",
+                             .default = str_remove(landuse, "^landuse"))) %>%
+    # compute actual means for reference land uses (i.e. subtract from food forest mean)
+    mutate(model_mean = ifelse(landuse != "Food_forest", 
+                             model_estimate[landuse == "Food_forest"] + model_estimate,
+                             model_estimate)) %>%
+    # reverse Smithson and Verkuilen transformation
+    mutate(across(where(is.numeric), ~ ((.) * length(df$avg_pairwise_dissim) - 0.5)/(length(df$avg_pairwise_dissim) - 1))) %>%
+    # back-transform to response scale
+    mutate(across(where(is.numeric), ~ exp(.) / (1 + exp(.)))) %>%
+    # join with sd values
+    left_join(mean_boot_sd) %>%
+    # add CI limits
+    mutate(lower.CL = model_mean - 1.96*boot_sd,
+           upper.CL = model_mean + 1.96*boot_sd) %>%
+    # format for ggplot_the_response
+    select(landuse, model_mean, lower.CL, upper.CL) %>%
+    rename(response = model_mean)
+    
+  ## obtain two-tailed p-values, 
+  boot_pval <- function(x) { 2*min(mean(x<0), mean(x>0)) } 
+  boot_contrasts <- data.frame(p_raw = apply(bb$t[, colnames(bb$t) != "(Intercept)"], 
+                                             2, boot_pval)) %>%
+    # adjust p-values for multiple comparisons using Holm's method (FWER) 
+    mutate(p_adj_Holm = p.adjust(p_raw, method = "holm"))  %>% 
+    # already format to supply to ggplot_the_response
+    # adding column contrast
+    rownames_to_column(var = "contrast") %>%
+    mutate(contrast = paste0(str_remove(contrast, "^landuse"), " - Food_forest")) %>%
+    rename(p.value = p_adj_Holm)
+
+  
+  ## plotting (the difference between original values and those after Smithson & Verkuilen transformation is minute)
+  p <- ggplot_the_response(
+    beta = TRUE,
+    fit = fitted_model,
+    fit_emm = estimates_response, 
+    fit_pairs = boot_contrasts, 
+        dots = "sina1",
+      contrast_rows = "all",
+      palette = pal_okabe_ito_FF,
+      y_label = "Average pairwise Bray-Curtis dissimilarity",
+      g_label = "none"
+    ) + 
+      theme(axis.text.x = element_blank(),
+            axis.title.y = element_text(size = 18),
+            axis.text.y = element_text(size = 15),
+            axis.ticks.x = element_blank()) +     
+    # make sure y-axis labels are always round numbers, except in case of springtails 1 digit
+      scale_y_continuous(labels = if(m == "springtails"){function(x) sprintf("%.1f", x)} 
+                         else function(x) sprintf("%.0f", x)) +
+      # code to add values for land use type that was not included in model due to too few values
+      {if(!(all(landusetypes %in% df$landuse)))
+      geom_point(data = avgdissimlist[[m]] %>% 
+                   # add the values for the landuse type that is missing in the df
+                   filter(landuse == landusetypes[!(landusetypes %in% df$landuse)]), 
+                 aes(x = landuse, y = avg_pairwise_dissim), size = 3.5, alpha = 0.6)} +
+      # need to overwrite some plot scaling
+      coord_cartesian(ylim = c(0, 1.35)) + # otherwise padding below 0.0
+      scale_y_continuous(expand = c(0,0), limits = c(0,1.35), breaks = seq(0, 1, by = 0.2))
+  
+  
+  avgdissim_plots[[m]] <- p
+  
+}
+
+# (avgdissimplot <- do.call("grid.arrange", c(avgdissim_plots, ncol = 3)))
+avgdissimplot <- wrap_plots(avgdissim_plots, ncol = 3) # to get x- and y-axes aligned
+ggsave("avgdissimplot.png", avgdissimplot, width = 360, height = 320, unit="mm", dpi=600)
+ggsave("avgdissimplot.svg", avgdissimplot, width = 360, height = 320, unit="mm", dpi=600)
+ggsave("avgdissimplot_legend.svg", avgdissimplot$bacteria + theme(legend.position = "bottom"), width = 100, height = 100, unit="mm", dpi=600)
+
+write.csv(dispcoeff, "beta_dispersioncoeff.csv")
+```
+
+## model summary 
+Not reporting R² maybe?
+https://stats.stackexchange.com/questions/552281/calculating-different-pseudo-r2-for-a-betareg-model
+Achim Zeileis: "I generally find the pseudo-R-squared to be of rather limited use in beta regression. Whether the model fit is useful (for you) depends on many aspects, e.g., whether you mostly want a model for the mean or you are really interested in a probabilistic fit. A comprehensive answer for this is beyond the scope of this question, though. Alternative means of model comparisons could include information criteria (AIC or BIC), scores for the mean predicitons like (root) mean-squared error (MSE, RMSE), or probabilistic scoring rules (CRPS, log-score), or graphical model assessments (quantile-quantile plots, PIT histograms, etc.)."
+
+For now not showing Fit-measures, because unsure how useful they would be and did not sufficiently read up on different options
+not showing CIs or p-values because they are already shown in figure from bootstrapping approach and these from model summary wouldn't correspond
+But then what is left to show? Model estimated means are also plotted already.
+That leaves the dispersion coefficient, which we could perhaps just add in the subscript of the figure
+
