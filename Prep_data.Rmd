@@ -1,0 +1,265 @@
+---
+title: "Prep_communitycomposition"
+author: "Lieke"
+date: "2024-12-08"
+output: html_document
+---
+
+```{r packages}
+# general
+library(tidyverse)
+# diversity indices
+library(iNEXT)
+library(hillR)
+# dissimilarity matrix, NMDS, PERMANOVA, PERMDISP
+library(vegan)
+```
+
+```{r functions}
+source("functions.R")
+```
+
+# Data
+
+```{r additional_data}
+codes_info <- read.csv("Data/codes_info.csv")
+sites_info <- codes_info %>%
+  select(site, location, landuse) %>%
+  distinct()
+
+macrofauna_specieslist <- read.csv("Data/macrofauna_specieslist.csv")
+
+# list of pitfall traps that were sampled 
+# compare with this list --> if given sample from this list not present in dataframe of a species group, it means that there were 0 individuals of this group in this sample vs. certain samples got lost and should not be attributed value 0
+sampled <- read.csv("Data/pitfall_sampled.csv")
+```
+
+The data is processed here, prepared for the analyses.
+First, we complete the data with zeroes for organism groups that were sampled in a given trap in a given session, but were not present in the sample.
+
+```{r data}
+# read in raw dataframe of harvestmen
+
+harvestmen_raw <- read.csv("Data/Harvestmen_P2.csv") %>%
+  select(!c(Stage, Sex)) %>%
+  as.data.frame() %>%
+  # change from all caps to normal
+  mutate(species = str_to_title(species))
+
+# make base dataframe, with species count per session per trap
+# complete dataframe and give code to be put as rowname later on
+harvestmen <- harvestmen_raw %>%
+    # sum "abundances" (activity-density) of same species in same trap
+    group_by(site, session, trap, species) %>% # later add site info (location and landuse) again
+    reframe(abundance = sum(abundance)) %>%
+    ungroup() %>% 
+    # right_join with list of sampled "samples" to obtain NA values for study sites that were sampled but did not contain any individuals of this species group
+    right_join(sampled %>% select(session, site, trap)) %>%
+    # complete with species, so that there is abundance 0 for each species without individuals in this sample (important for species-abundance matrix later on) (would also happen automatically when using pivot_wider)
+    complete(nesting(session, site, trap), species) %>%
+    # remove "NA" species, no longer necessary (were the result of adding the "empty samples")
+    filter(!is.na(species)) %>%
+    # abundance NA to 0
+    mutate(abundance = replace_na(abundance, 0)) %>%
+    # convert session and trap to factor
+    mutate(session = factor(session),
+           trap = factor(trap)) 
+```
+
+Now we make three dataframes.
+For all the actual analyses, we combine the four sampling sessions, we do not regard them separately.
+Because not all sites were visited in all sessions, we average rather than sum the species counts per session.
+We can further either a) keep the data per trap, so the average species count per session for each trap; b) combine two traps per site by first summing the species counts per trap and then averaging per session; c) combine two traps per site by taking the average species count per trap and then averaging per session.
+
+If we want to sum two traps per site, it's important that it doesn't occur often that one of the traps is missing for a site.
+This is the case in 10 instances out of 169, 1/44 in session 1, 3/44 in session 2, 1/44 in session 3 and 5/44 in session 4. Session 4 does contain the highest proportion of individuals generally (calculated for those traps for which all four sessions were available), so the absence of one of both traps in session 4 can have some influence. On the other hand, this is kind of easier to follow, this approach, clearer to interpret for the reader, and it does not occur thát often.
+
+We will make all three dataframes and perform all the stuff below for all three (for the P2 paper we used data per trap, not combined per site). 
+
+I believe I will choose for option b, but let's see if there are great differences between the three.
+
+```{r threedf}
+
+# per trap
+harvestmen_trap <- harvestmen %>%
+  # average count per session
+  group_by(site, trap, species) %>%
+  summarise(count = mean(abundance)) %>%
+  # give code
+  mutate(code = paste0(site, trap)) %>%
+  ungroup() %>%
+  select(!c(site, trap))
+### checked for AN Oligolophus_tridens and is correctly averaged across sessions per trap
+### 6.25 for trap 1 (total count 25) and 0.25 for trap 2 (total count 1)
+      
+# per site - summed
+harvestmen_sitesum <- harvestmen %>%
+  # sum two traps per site per session
+  group_by(session, site, species) %>%
+  reframe(count = sum(abundance)) %>%
+  # average count per session
+  group_by(site, species) %>%
+  summarise(count = mean(count)) %>%
+  # temporarily rename site as code (to facilitate loops)
+  rename("code" = site)
+### checked for AN Oligolophus_tridens and is correctly averaged across sessions per site
+### 6.5 (total count 26)
+  
+# per site - averaged
+harvestmen_sitemean <- harvestmen %>%
+  # average two traps per site per session
+  group_by(session, site, species) %>%
+  reframe(count = mean(abundance)) %>%
+  # average count per session
+  group_by(site, species) %>%
+  summarise(count = mean(count)) %>%
+  # temporarily rename site as code (to facilitate loops)
+  rename("code" = site)
+### checked for AN Oligolophus_tridens and is correctly averaged across sessions per site
+### 3.25 (6.25 + 0.25)/2
+
+
+# put the three df in list
+dflist <- list("df_trap" = harvestmen_trap,
+               "df_sitesum" = harvestmen_sitesum,
+               "df_sitemean" = harvestmen_sitemean)
+```
+
+## Data description
+
+```{r data_description}
+# # look at distribution per session
+# harvestmen %>%
+#   group_by(session, site, landuse, trap) %>%
+#   # sum counts of different species
+#   reframe(total_count = sum(abundance)) %>%
+# ggplot(aes(x = session, y = total_count, group = landuse, colour = landuse)) +
+#   geom_boxplot() +
+#   geom_jitter()
+# 
+# # look at which proportion, per trap for which all sessions were available, is made up of each session
+# testy <- harvestmen %>%
+#   group_by(session, site, landuse, trap) %>%
+#   # sum counts of different species
+#   reframe(total_count = sum(abundance)) %>%
+#   # keep only those groups for which the number of sessions equals 4
+#   filter(n_distinct(session) == 4) %>%
+#   # calculate proportion of each of the sessions (within groups, i.e. traps)
+#   ungroup %>%
+#   group_by(site, landuse, trap) %>%
+#   mutate(prop = 100 * total_count/sum(total_count)) %>%
+#   # summary statistics or visual summary of proportion (didn't need this last for visulaisation, e.g. in stacked bar)
+#   ungroup() %>%
+#   group_by(landuse, session) %>%
+#   reframe(mean_prop = mean(prop, na.rm = TRUE))
+ 
+```
+
+## Quantity
+
+Here, for each of the three dataframes, make a dataframe with the ultimate total quantity value per trap or site.
+```{r quantitylist}
+quantlist <- list()
+
+for(m in names(dflist)){
+  quantlist[[m]] <- dflist[[m]] %>%
+    ungroup() %>%
+    group_by(code) %>% # "trap" not included but can be found as part of "code" for pitfall trap data, and for site rename code to site
+    summarise(count = sum(count)) %>% # if we sum first per session and then average sessions or average first and then sum wouldn't make a difference
+    # add trap and site info
+    left_join(codes_info) %>%
+    # landuse to factor
+    mutate(landuse = factor(landuse, levels = c("Food_forest",
+                                                "Forest",
+                                                "Grassland",
+                                                "Arable_field")))
+}
+
+saveRDS(dflist, "quantitylist.rds")
+```
+
+## Species-abundance matrices
+
+Here, the harvestmen count data is transformed into species-abundance matrices.
+
+```{r specab}
+specablist <- list()
+
+for(m in names(dflist)) {
+  specablist[[m]] <- dflist[[m]] %>% 
+    # make species-abundance matrix
+    pivot_wider(names_from = species,
+                values_from = count) %>%
+  # remove empty communities (necessary for NMDS and PERMANOVA) 
+  # for now we don't yet remove all communities that have less than 5 individuals, we just keep all non-empty communities in
+    column_to_rownames(var = "code") %>%
+    # keep only those rows where the total sum of individuals is > 0 (could be set to different threshold later on)
+    filter(rowSums(across(where(is.numeric))) > 0) 
+}
+
+```
+
+## Diversity
+
+```{r diversitylist}
+diversitylist <- list()
+
+for(m in names(specablist)){
+  df <- data.frame(D0 = rowSums(specablist[[m]]!= 0))
+  diversitylist[[m]] <- df %>%
+  # if 0D is zero, 1D and 2D also need to be zero (if not coded like this, exp(H') = 1 if SR = 0)
+    mutate(D1 = ifelse(D0 > 0,
+                       hill_taxa(comm = specablist[[m]], q = 1),
+                       0),
+           D2 = ifelse(D0 > 0,
+                       hill_taxa(comm = specablist[[m]], q = 2),
+                       0)) %>%
+    rownames_to_column(var = "code") %>%
+    # re-add information on location and landuse
+    left_join(codes_info) %>%
+    mutate(landuse = factor(landuse, levels = c("Food_forest",
+                                                "Forest",
+                                                "Grassland",
+                                                "Arable_field")))
+}
+
+saveRDS(diversitylist, "diversitylist.rds")
+```
+
+
+## Community composition
+
+### Dissimilarity matrices
+
+Here we produce the Bray-Curtis dissimilarity matrices.
+
+```{r dissimlist}
+dissimlist <- list() 
+
+for(g in names(specablist)){
+  dissimlist[[g]] <- vegdist(specablist[[g]], method = "bray")
+}
+
+saveRDS(dissimlist, "dissimlist.rds")
+```
+
+### Taxonomic data
+
+Here, we prepare the data for the stacked bars.
+We show this at the site level rather than the trap level, so that we have 44 bars.
+We can thus either use df_sitesum or df_sitemean, display the mean proportion of a species per site (averaged across two traps), or just its proportion in the total of all individuals, of both traps together.
+We provide extra taxonomic information (genus, family, order, class).
+
+```{r taxon}
+
+taxonomic  <- dflist[["df_sitesum"]] %>%
+  mutate(method = "sum") %>%
+  rbind(dflist[["df_sitemean"]] %>% mutate(method = "mean")) %>%
+  # add taxonomic information
+  left_join(macrofauna_specieslist)
+
+saveRDS(taxonomic, "taxonomic.rds")
+```
+## Compute average pairwise dissimilarity per study site (for beta-diversity)
+
+Not done for this A2 paper.
