@@ -123,6 +123,9 @@ harvestmen_sitemean <- harvestmen %>%
 dflist <- list("df_trap" = harvestmen_trap,
                "df_sitesum" = harvestmen_sitesum,
                "df_sitemean" = harvestmen_sitemean)
+
+# save
+saveRDS(dflist, "dflist.rds")
 ```
 
 ## Data description
@@ -197,6 +200,7 @@ for(m in names(dflist)) {
     filter(rowSums(across(where(is.numeric))) > 0) 
 }
 
+saveRDS(specablist, "specablist.rds")
 ```
 
 ## Diversity
