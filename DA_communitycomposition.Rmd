@@ -32,25 +32,26 @@ source("functions.R")
 ```
 
 ```{r data}
-dissimlist <- readRDS("dissimlist.rds")
 
-codes_info <- read.csv("Data/codes_info.csv")
-sites_info <- codes_info %>%
-  select(site, location, landuse) %>%
-  distinct()
+# original data
+harvestmen_raw <- read.csv("Data/Harvestmen_P2.csv") %>%
+  select(!c(Stage, Sex)) %>%
+  as.data.frame() %>%
+  # change from all caps to normal
+  mutate(species = str_to_title(species))
+dflist <- readRDS("dflist.rds")
 
 # species abundance matrices (community data table)
 specablist <- readRDS("specablist.rds")
 
-# read in data used for stacked bars taxonomy
-taxonomic <- readRDS("taxonomic.rds")
+# Bray-Curtis dissimilarity
+dissimlist <- readRDS("dissimlist.rds")
 
-# original data
-harvestmen_raw <- read.csv("Data/Harvestmen_P2.csv")
-dflist <- readRDS("dflist.rds")
+# code info
+codes_info <- read.csv("Data/codes_info.csv")
 
-# taxonomic info
-taxonomy <- read.csv("Data/macrofauna_specieslist.csv")
+# taxonomic and forest affinity info
+species_info <- read.csv("Data/species_info.csv")
 
 # # read in NMDS results
 # NMDSreslist <- readRDS("NMDSreslist.rds")
@@ -155,11 +156,6 @@ Stacked bars with proportion of individuals belonging to certain taxonomic group
 This is in any case at the site level, not trap level, and taking the mean proportion per site or the proportion after having summed two traps per site gives exactly the same results (logically, but also tested it to be sure).
 
 ```{r taxonomy_bars_layout}
-
-taxon_harvestmen <- readRDS("taxon_macroarthropods.rds") %>%
-  filter(group == "harvestmen")
-
-
 # colours
 pal <- c("#0C7BDC", "#FFC20A","#40B0A6","#5D3A9B","#FEFE62","#DC3220","#1AFF1A","#D35FB7","#994F00","#88CCEE")
 
@@ -187,32 +183,7 @@ set_theme <- list(
 ```
 
 ```{r taxonomy_bars}
-# mean per site
-tax_stack_mean <- taxon_harvestmen %>%
-  left_join(sites_info) %>%
-  mutate(landuse = factor(landuse, levels = c("Food_forest", "Forest",
-                                              "Grassland", "Cropland"))) %>%
-  filter(mean_quant > 0) %>%
-  ggnested(aes(x = site, y = mean_quant, main_group = family, sub_group = genus), 
-         main_palette = pal) + 
-  geom_col(position = position_fill(reverse = TRUE)) + 
-  # 0 at level 0 of y axis
-  scale_y_continuous(expand = expansion(mult = c(0, .05))) + #, labels = scales::percent
-  # add padding around outer bars
-  scale_x_discrete(expand = expansion(add = .8)) +
-  labs(y = "Proportion of captured individuals",
-       fill = "Genus") +
-  facet_grid(.~ landuse, switch = "x", space = "free_x", scales = "free_x",
-             labeller = labeller(landuse = c("Food_forest" = "Food forest",
-                                             "Forest" = "Forest",
-                                             "Grassland" = "Grassland",
-                                             "Arable_field" = "Cropland"))) +
-  guides(fill = guide_legend(ncol = 2)) +
-  set_theme + 
-  theme(legend.position = "right")
-
-# sum (should be almost same as mean)
-tax_stack_sum <- dflist[["df_sitesum"]] %>%
+tax_stack <- dflist[["df_sitesum"]] %>%
   filter(count > 0) %>%
   left_join(codes_info) %>%
   ungroup() %>%
@@ -220,7 +191,7 @@ tax_stack_sum <- dflist[["df_sitesum"]] %>%
                                               "Grassland", "Arable_field" ))) %>%
   # add taxonomic information
   left_join(taxonomy) %>%
-  ggnested(aes(x = code, y = count, main_group = family, sub_group = genus), 
+  ggnested(aes(x = code, y = count, main_group = family, sub_group = species), 
          main_palette = pal) +
   geom_col(position = position_fill(reverse = TRUE)) + 
   # 0 at level 0 of y axis
@@ -234,15 +205,80 @@ tax_stack_sum <- dflist[["df_sitesum"]] %>%
                                              "Forest" = "Forest",
                                              "Grassland" = "Grassland",
                                              "Arable_field" = "Cropland"))) +
-  guides(fill = guide_legend(ncol = 2)) +
+  guides(fill = guide_legend(ncol = 1)) + # number of columns for legend
   set_theme +
   theme(legend.position = "right")
 
-tax_stack_mean
-tax_stack_sum
+ggsave("tax_stack.png")
 ```
 
+# Species table
 
+```{r speciestable}
+
+# averaged across sessions (still need to fix this, sum per species, now multiple rows per species)
+# tbl <- dflist[["df_sitesum"]] %>% 
+#   # here count is the average of the four or three sessions
+#   # could also opt for displaying total number of individuals, not averaged?
+#   # but this is also because perhaps bias in land use types in terms of visitation session 4?
+#   left_join(codes_info) %>%
+#   filter(count > 0) %>%
+#   mutate(landuse = factor(landuse, levels = c("Food_forest", "Forest", 
+#                                               "Grassland", "Arable_field" ))) %>%
+#   ungroup() %>%
+#   pivot_wider(names_from = landuse,
+#               values_from = count) %>%
+#   replace_na(list(Food_forest = 0, Forest = 0, Grassland = 0, Arable_field = 0)) %>%
+#   mutate(Total = rowSums(across(where(is.numeric)))) %>%
+#   # round
+#   left_join(species_info) %>%
+#   arrange(family) %>%
+#   select(species, family, 
+#          forest_affinity, 
+#          #IUCN_BE, IUCN_NL, # may still look for this, but likely doesn't exist
+#          Food_forest, Forest, Grassland, Arable_field, Total) %>%
+#   # cleaner presentation of strings
+#   mutate(species = gsub("_", " ", species)) %>%
+#   rename("Species" = "species",
+#          "Affinity to forests" = "forest_affinity",
+#          "Food forest" = "Food_forest",
+#          "Cropland" = "Arable_field",
+#          )
+
+
+# not averaged across sessions 
+tbl_total <- readRDS("harvestmen.rds") %>%
+  left_join(codes_info %>% select(site, location, landuse) %>% distinct()) %>%
+  # sum all counts per species per land use type
+  group_by(landuse, species) %>%
+  summarise(count = sum(abundance)) %>%
+  mutate(landuse = factor(landuse, levels = c("Food_forest", "Forest", 
+                                              "Grassland", "Arable_field" ))) %>%
+  ungroup() %>%
+  pivot_wider(names_from = landuse,
+              values_from = count) %>%
+  replace_na(list(Food_forest = 0, Forest = 0, Grassland = 0, Arable_field = 0)) %>%
+  mutate(Total = rowSums(across(where(is.numeric)))) %>%
+  left_join(species_info) %>%
+  arrange(family) %>%
+  select(species, family, 
+         forest_affinity, 
+         #IUCN_BE, IUCN_NL, # may still look for this, but likely doesn't exist
+         Food_forest, Forest, Grassland, Arable_field, Total) %>%
+  # cleaner presentation of strings
+  mutate(species = gsub("_", " ", species)) %>%
+  rename("Species" = "species",
+         "Affinity to forests" = "forest_affinity",
+         "Food forest" = "Food_forest",
+         "Cropland" = "Arable_field",
+         )
+  
+  
+# save as csv
+write.csv(tbl_total, "speciestable_total.csv")
+```
+
+<!--
 ## PERMDISP and PERMANOVA
 
 ### 3 betadispers
@@ -360,4 +396,4 @@ for(m in names(dmlist)){
 flextable(permanova_output)
 write.csv(permanova_output, "PERMANOVA_output.csv")
 ```
-
+-->

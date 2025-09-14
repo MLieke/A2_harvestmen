@@ -27,7 +27,6 @@ sites_info <- codes_info %>%
   select(site, location, landuse) %>%
   distinct()
 
-macrofauna_specieslist <- read.csv("Data/macrofauna_specieslist.csv")
 
 # list of pitfall traps that were sampled 
 # compare with this list --> if given sample from this list not present in dataframe of a species group, it means that there were 0 individuals of this group in this sample vs. certain samples got lost and should not be attributed value 0
@@ -64,6 +63,9 @@ harvestmen <- harvestmen_raw %>%
     # convert session and trap to factor
     mutate(session = factor(session),
            trap = factor(trap)) 
+
+# save
+saveRDS(harvestmen, "harvestmen.rds")
 ```
 
 Now we make three dataframes.
@@ -247,23 +249,7 @@ for(g in names(specablist)){
 saveRDS(dissimlist, "dissimlist.rds")
 ```
 
-### Taxonomic data
 
-Here, we prepare the data for the stacked bars.
-We show this at the site level rather than the trap level, so that we have 44 bars.
-We can thus either use df_sitesum or df_sitemean, display the mean proportion of a species per site (averaged across two traps), or just its proportion in the total of all individuals, of both traps together.
-We provide extra taxonomic information (genus, family, order, class).
-
-```{r taxon}
-
-taxonomic  <- dflist[["df_sitesum"]] %>%
-  mutate(method = "sum") %>%
-  rbind(dflist[["df_sitemean"]] %>% mutate(method = "mean")) %>%
-  # add taxonomic information
-  left_join(macrofauna_specieslist)
-
-saveRDS(taxonomic, "taxonomic.rds")
-```
 ## Compute average pairwise dissimilarity per study site (for beta-diversity)
 
 Not done for this A2 paper.
