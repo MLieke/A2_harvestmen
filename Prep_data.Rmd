@@ -206,11 +206,7 @@ for(m in names(dflist)) {
     # make species-abundance matrix
     pivot_wider(names_from = species,
                 values_from = count) %>%
-  # remove empty communities (necessary for NMDS and PERMANOVA) 
-  # for now we don't yet remove all communities that have less than 5 individuals, we just keep all non-empty communities in
-    column_to_rownames(var = "code") %>%
-    # keep only those rows where the total sum of individuals is > 0 (could be set to different threshold later on)
-    filter(rowSums(across(where(is.numeric))) > 0) 
+    column_to_rownames(var = "code")
 }
 
 
@@ -256,13 +252,19 @@ Here we produce the Bray-Curtis dissimilarity matrices.
 dissimlist <- list() 
 
 for(g in names(specablist)){
-  dissimlist[[g]] <- vegdist(specablist[[g]], method = "bray")
+  df <- specablist[[g]] %>%
+    # remove empty communities
+    # keep only those rows where the total sum of individuals is > 0 (could be set to different threshold later on)
+    filter(rowSums(across(where(is.numeric))) > 0)
+  
+  dissimlist[[g]] <- vegdist(df, method = "bray")
 }
 
 saveRDS(dissimlist, "dissimlist.rds")
 ```
 
-
+    
+    
 ## Compute average pairwise dissimilarity per study site (for beta-diversity)
 
 Not done for this A2 paper.
