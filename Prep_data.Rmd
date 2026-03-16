@@ -126,6 +126,12 @@ dflist <- list("df_trap" = harvestmen_trap,
                "df_sitesum" = harvestmen_sitesum,
                "df_sitemean" = harvestmen_sitemean)
 
+# add one for df_sitesum that doesn't include grasslands and croplands
+dflist[["df_sitesum_FOFF"]] <- dflist[["df_sitesum"]] %>%
+  left_join(codes_info) %>%
+  filter(landuse %in% c("Food_forest", "Forest")) %>%
+  select(!c(location, landuse, site)) 
+
 # save
 saveRDS(dflist, "dflist.rds")
 ```
@@ -201,6 +207,7 @@ for(m in names(dflist)) {
     # keep only those rows where the total sum of individuals is > 0 (could be set to different threshold later on)
     filter(rowSums(across(where(is.numeric))) > 0) 
 }
+
 
 saveRDS(specablist, "specablist.rds")
 ```

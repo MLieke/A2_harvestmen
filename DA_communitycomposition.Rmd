@@ -68,6 +68,7 @@ NMDSreslist <- list() # will be chill to have this saved instead of having to re
 
 for(m in names(dissimlist)){
   df <- dissimlist[[m]]
+    # remove croplands and grasslands
   set.seed(2983847)
   NMDS_res <- metaMDS(df, k = 2, trymax = 999, trace = FALSE) 
   # autotransform by default TRUE
@@ -85,9 +86,9 @@ for(m in names(dissimlist)){
 saveRDS(NMDSreslist, "NMDSreslist.rds")
 # (NMDSplot <- do.call("grid.arrange", c(NMDS_plots, ncol = 3)))
 (NMDSplot <- do.call("plot_grid", c(NMDS_plots[c("df_trap", "df_sitesum")], ncol=2, align="hv")))
-ggsave("NMDSplot.png", NMDSplot, width = 12, height = 8)
-ggsave("NMDSplot.svg", NMDSplot, width = 16, height = 8)
 
+ggsave("NMDSplot.svg", NMDSplot, width = 16, height = 8)
+ggsave("NMDSplotFOFF.svg", NMDS_plots[["df_sitesum_FOFF"]], width = 8, height = 8)
 
 ## if we only include communities with at least 5 individuals and only include land use types for which at least 6 observations remain, we can still make the comparison with forests, but not with grass- and croplands (check if at site level this would be remedied)
 
