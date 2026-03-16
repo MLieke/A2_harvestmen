@@ -34,7 +34,7 @@ source("functions.R")
 ```{r data}
 
 # original data
-harvestmen_raw <- read.csv("Data/Harvestmen_P2.csv") %>%
+harvestmen_raw <- read.csv("Data/Harvestmen.csv") %>%
   select(!c(Stage, Sex)) %>%
   as.data.frame() %>%
   # change from all caps to normal
