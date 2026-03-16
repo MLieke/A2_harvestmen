@@ -39,7 +39,7 @@ First, we complete the data with zeroes for organism groups that were sampled in
 ```{r data}
 # read in raw dataframe of harvestmen
 
-harvestmen_raw <- read.csv("Data/Harvestmen_P2.csv") %>%
+harvestmen_raw <- read.csv("Data/Harvestmen.csv") %>%
   select(!c(Stage, Sex)) %>%
   as.data.frame() %>%
   # change from all caps to normal
@@ -186,18 +186,23 @@ for(m in names(dflist)){
                                                 "Arable_field")))
 }
 
-saveRDS(dflist, "quantitylist.rds")
+saveRDS(quantlist, "quantitylist.rds")
 ```
 
 ## Species-abundance matrices
 
 Here, the harvestmen count data is transformed into species-abundance matrices.
 
+For the analysis of the diversity and community composition, juveniles that were unidentified at the species level were excluded, except for Leiobunum_spec. because of these we were sure that they were an extra species not yet present in the samples.
 ```{r specab}
 specablist <- list()
 
 for(m in names(dflist)) {
   specablist[[m]] <- dflist[[m]] %>% 
+    # filter out all spec. entries except for Leiobunum_spec.
+    filter(!(species %in% c("Phalangiidae_spec.",
+                            "Nemastomatidae_spec.", 
+                            "Nemastoma_spec."))) %>%
     # make species-abundance matrix
     pivot_wider(names_from = species,
                 values_from = count) %>%
@@ -214,6 +219,7 @@ saveRDS(specablist, "specablist.rds")
 
 ## Diversity
 
+As this is based on the specablists, the _spec. entries are already removed.
 ```{r diversitylist}
 diversitylist <- list()
 
