@@ -278,7 +278,7 @@ df <- specablist[["df_sitesum_FOFF"]] %>%
     filter(tot_count >= 5) %>%
   select(!tot_count) %>%
   column_to_rownames(var = "site")
-dissimlist[["df_sitestum_FOFF_5"]] <- vegdist(df, method = "bray")
+dissimlist[["df_sitesum_FOFF_5"]] <- vegdist(df, method = "bray")
 
 saveRDS(dissimlist, "dissimlist.rds")
 ```
