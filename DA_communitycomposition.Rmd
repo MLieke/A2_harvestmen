@@ -39,6 +39,7 @@ harvestmen_raw <- read.csv("Data/Harvestmen.csv") %>%
   as.data.frame() %>%
   # change from all caps to normal
   mutate(species = str_to_title(species))
+
 dflist <- readRDS("dflist.rds")
 
 # species abundance matrices (community data table)
@@ -84,49 +85,10 @@ for(m in names(dissimlist)){
 }
 
 saveRDS(NMDSreslist, "NMDSreslist.rds")
-# (NMDSplot <- do.call("grid.arrange", c(NMDS_plots, ncol = 3)))
-(NMDSplot <- do.call("plot_grid", c(NMDS_plots[c("df_trap", "df_sitesum")], ncol=2, align="hv")))
 
-ggsave("NMDSplot.svg", NMDSplot, width = 16, height = 8)
-ggsave("NMDSplotFOFF.svg", NMDS_plots[["df_sitesum_FOFF"]], width = 8, height = 8)
-
-## if we only include communities with at least 5 individuals and only include land use types for which at least 6 observations remain, we can still make the comparison with forests, but not with grass- and croplands (check if at site level this would be remedied)
-
-# NMDS_plots_sep <- list()
-# 
-# for(m in names(dissimlist)){
-#   set.seed(2983847)
-#   df <- as.matrix(dissimlist[[m]])
-# 
-#   rn <- data.frame(code = rownames(df)) %>%
-#     left_join(codes_info %>% select(code, landuse, location))
-#   
-#   # count number of observations per land use type
-#   n_obs <- rn %>%
-#     group_by(landuse) %>%
-#     summarise(n = n()) %>%
-#     # now already remove land use type for which there are less than 6 observations
-#     filter(n >= 6)
-#   
-#   # filter out rownames (and column names) of land use type with too few observations
-#   rn <- rn %>%
-#     filter(landuse %in% n_obs$landuse)
-#   
-#   df <- df[rn$code, rn$code]
-# 
-#     
-#   p <- myNMDS(df, codes_info) + 
-#     # temporary for figure
-#     labs(x = "NMDS1", y = "NMDS2")
-#   
-#   NMDS_plots_sep[[m]] <- p
-# 
-# }
-# 
-# 
-# 
-# (NMDSplot_sep <- do.call("grid.arrange", c(NMDS_plots_sep, ncol = 3)))
-# ggsave("NMDSplot_sep.svg", NMDSplot_sep, width = 16, height = 16)
+# ggsave("NMDSplot.svg", NMDS_plots[["df_sitesum"]], width = 16, height = 8)
+# ggsave("NMDSplotFOFF.svg", NMDS_plots[["df_sitesum_FOFF"]], width = 8, height = 8)
+ggsave("NMDSplotFOFF_5.svg", NMDS_plots[["df_sitesum_FOFF_5"]], width = 8, height = 8)
 ```
 
 # Indicator species
@@ -156,7 +118,7 @@ summary(indval, alpha = 0.1) # alpha = 1 to display all
 Stacked bars with proportion of individuals belonging to certain taxonomic group.
 This is in any case at the site level, not trap level, and taking the mean proportion per site or the proportion after having summed two traps per site gives exactly the same results (logically, but also tested it to be sure).
 
-```{r taxonomy_bars_layout}
+```{r stackedbars_layout}
 # colours
 pal <- c("#0C7BDC", "#FFC20A","#40B0A6","#5D3A9B","#FEFE62","#DC3220","#1AFF1A","#D35FB7","#994F00","#88CCEE")
 
@@ -180,19 +142,54 @@ set_theme <- list(
         # legend.text = element_text(size = 13), 
         # legend.title = element_text(size = 14))
 )
-
 ```
 
-```{r taxonomy_bars}
-tax_stack <- dflist[["df_sitesum"]] %>%
+```{r prepare_df}
+
+df_all <- dflist[["df_sitesum"]] %>%
+  # filter out all spec. entries except for Leiobunum_spec.
+  filter(!(species %in% c("Phalangiidae_spec.",
+                          "Nemastomatidae_spec.", 
+                          "Nemastoma_spec."))) %>%
   filter(count > 0) %>%
   left_join(codes_info) %>%
   ungroup() %>%
-  mutate(landuse = factor(landuse, levels = c("Food_forest", "Forest",
-                                              "Grassland", "Arable_field" ))) %>%
-  # add taxonomic information
-  left_join(taxonomy) %>%
-  ggnested(aes(x = code, y = count, main_group = family, sub_group = species), 
+  mutate(landuse = factor(landuse, 
+                          levels = c("Food_forest", "Forest",
+                                    "Grassland",
+                                     "Arable_field" ))) %>%
+  # add taxonomic and forest affinity information
+  left_join(species_info) %>%
+  # add column total count
+  group_by(code) %>%
+  mutate(tot_count = sum(count)) %>% 
+  ungroup()
+
+df_5 <- df_all %>%
+  # filter out too small assemblages
+  filter(tot_count >= 5/4)
+  
+# to put info of total count on bar
+df_labs <- harvestmen_raw %>% 
+    filter(!(species %in% c("Phalangiidae_spec.",
+                          "Nemastomatidae_spec.", 
+                          "Nemastoma_spec."))) %>%
+  group_by(site) %>%
+  summarise(tot_count = sum(abundance))
+
+labeller_sites <- setNames(as.character(df_labs$tot_count), df_labs$site)
+
+my_labeller <- labeller(landuse = c("Food_forest" = "Food forest",
+                                             "Forest" = "Forest",
+                                             "Grassland" = "Grassland",
+                                             "Arable_field" = "Cropland"))
+```
+
+```{r taxonomy_bars}
+# for all sites
+tax_stack <- df_all %>%
+  ggnested(aes(x = code, y = count, 
+               main_group = family, sub_group = genus), #species 
          main_palette = pal) +
   geom_col(position = position_fill(reverse = TRUE)) + 
   # 0 at level 0 of y axis
@@ -202,6 +199,75 @@ tax_stack <- dflist[["df_sitesum"]] %>%
   labs(y = "Proportion of captured individuals",
        fill = "Genus") +
   facet_grid(.~ landuse, switch = "x", space = "free_x", scales = "free_x",
+             labeller = my_labeller) +
+  guides(fill = guide_legend(ncol = 1)) + # number of columns for legend
+  set_theme +
+  theme(legend.position = "right",
+        axis.text.x = element_text(size = 8, angle = 90)) +
+  # add padding around outer bars
+  scale_x_discrete(expand = expansion(add = .8), 
+                   labels = function(x)
+      labeller_sites[str_extract(x, regex("[:alpha:]*"))])
+
+ggsave("Figures/tax_stack_all.svg", dpi = 300, unit = "mm", width = 210, height = 160)
+
+# for only those communities with at least 5 individuals (after removal of _spec. entries)
+# tax_stack_5 <- df_5 %>%
+#   ggnested(aes(x = code, y = count, 
+#                main_group = family, sub_group = genus), #species 
+#          main_palette = pal) +
+#   geom_col(position = position_fill(reverse = TRUE)) + 
+#   # 0 at level 0 of y axis
+#   scale_y_continuous(expand = expansion(mult = c(0, .05))) + #, labels = scales::percent
+#   # add padding around outer bars
+#   scale_x_discrete(expand = expansion(add = .8)) +
+#   labs(y = "Proportion of captured individuals",
+#        fill = "Genus") +
+#   facet_grid(.~ landuse, switch = "x", space = "free_x", scales = "free_x",
+#              labeller = labeller(landuse = c("Food_forest" = "Food forest",
+#                                              "Forest" = "Forest",
+#                                              "Grassland" = "Grassland",
+#                                              "Arable_field" = "Cropland"))) +
+#   guides(fill = guide_legend(ncol = 1)) + # number of columns for legend
+#   set_theme +
+#   theme(legend.position = "right")
+# 
+# ggsave("tax_stack_5.png")
+```
+```{r FO_bar_all}
+# for all sites
+forest_stack <- dflist[["df_sitesum"]] %>%
+  # filter out all spec. entries except for Leiobunum_spec.
+  filter(!(species %in% c("Phalangiidae_spec.",
+                          "Nemastomatidae_spec.", 
+                          "Nemastoma_spec."))) %>%
+  filter(count > 0) %>%
+  left_join(codes_info) %>%
+  ungroup() %>%
+  mutate(landuse = factor(landuse, levels = c("Food_forest", "Forest",
+                                              "Grassland", "Arable_field" ))) %>%
+  # add FO affinity information
+  left_join(species_info) %>%
+  mutate(forest_affinity = factor(forest_affinity,
+                                  levels = c("Strong-closed", "Strong",
+                                             "Strong-open","Moderate",
+                                             "Weak","None", "NA"))) %>%
+  ggplot(aes(x = code, y = count, fill = forest_affinity)) +
+  geom_col(position = position_fill(reverse = TRUE)) + 
+  # 0 at level 0 of y axis
+  scale_y_continuous(expand = expansion(mult = c(0, .05))) +
+  # add padding around outer bars
+  scale_x_discrete(expand = expansion(add = .8)) +
+  scale_fill_manual(values = c("#275317","#3B7D23","#8ED973",
+                               "#0B76A0","#96DCF8","#D9D9D9",
+                               "#ededed")) +
+  labs(y = "Proportion of captured individuals",
+       fill = "Forest affinity") +
+  # 0 at level 0 of y axis
+  scale_y_continuous(expand = expansion(mult = c(0, .05))) + #, labels = scales::percent
+  # add padding around outer bars
+  scale_x_discrete(expand = expansion(add = .8)) +
+  facet_grid(.~ landuse, switch = "x", space = "free_x", scales = "free_x",
              labeller = labeller(landuse = c("Food_forest" = "Food forest",
                                              "Forest" = "Forest",
                                              "Grassland" = "Grassland",
@@ -210,8 +276,62 @@ tax_stack <- dflist[["df_sitesum"]] %>%
   set_theme +
   theme(legend.position = "right")
 
-ggsave("tax_stack.png")
+ggsave("Figures/FO_stack_all.svg", 
+         dpi = 300, unit = "mm", width = 210, height = 160)
 ```
+
+```{r habitat_bar_all}
+# for all sites
+habitat_stack <- dflist[["df_sitesum"]] %>%
+  # filter out all spec. entries except for Leiobunum_spec.
+  filter(!(species %in% c("Phalangiidae_spec.",
+                          "Nemastomatidae_spec.", 
+                          "Nemastoma_spec."))) %>%
+  filter(count > 0) %>%
+  left_join(codes_info) %>%
+  ungroup() %>%
+  mutate(landuse = factor(landuse, levels = c("Food_forest", "Forest",
+                                              "Grassland", "Arable_field" ))) %>%
+  # add FO affinity information
+  left_join(species_info) %>%
+  mutate(habitat_affinity = factor(habitat_affinity,
+                                  levels = c("Forest-closed", "Forest",
+                                             "Forest-open","Mixed-equal",
+                                             "Mixed-open","Open", NA))) %>%
+  ggplot(aes(x = code, y = count, fill = habitat_affinity)) +
+  geom_col(position = position_fill(reverse = TRUE)) + 
+  # 0 at level 0 of y axis
+  scale_y_continuous(expand = expansion(mult = c(0, .05))) +
+  # add padding around outer bars
+  scale_x_discrete(expand = expansion(add = .8)) +
+  scale_fill_manual(values = c("#275317","#3B7D23","#6a9731",
+                               "#98b142","#c8cb57","#fae470",
+                               "#D9D9D9"),
+                    na.value = "#D9D9D9") +
+  labs(y = "Proportion of captured individuals",
+       fill = "Preferred habitat") +
+  # 0 at level 0 of y axis
+  scale_y_continuous(expand = expansion(mult = c(0, .05))) + #, labels = scales::percent
+  # add padding around outer bars
+  scale_x_discrete(expand = expansion(add = .8)) +
+  facet_grid(.~ landuse, switch = "x", space = "free_x", scales = "free_x",
+             labeller = labeller(landuse = c("Food_forest" = "Food forest",
+                                             "Forest" = "Forest",
+                                             "Grassland" = "Grassland",
+                                             "Arable_field" = "Cropland"))) +
+  guides(fill = guide_legend(ncol = 1)) + # number of columns for legend
+  set_theme +
+  theme(legend.position = "right",
+        axis.text.x = element_text(size = 8, angle = 90)) +
+  # add padding around outer bars
+  scale_x_discrete(expand = expansion(add = .8), 
+                   labels = function(x)
+      labeller_sites[str_extract(x, regex("[:alpha:]*"))])
+
+ggsave("Figures/habitat_stack_all.svg", 
+         dpi = 300, unit = "mm", width = 210, height = 160)
+```
+
 
 # Species table
 
