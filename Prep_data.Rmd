@@ -66,6 +66,15 @@ harvestmen <- harvestmen_raw %>%
 
 # save
 saveRDS(harvestmen, "harvestmen.rds")
+
+# calculate total number of individuals per site (sum of traps, without averaging across sessions), excluding _spec. (except for Leiobunum spec.)
+tot_count <- harvestmen %>%
+      # filter out all spec. entries except for Leiobunum_spec.
+    filter(!(species %in% c("Phalangiidae_spec.",
+                            "Nemastomatidae_spec.", 
+                            "Nemastoma_spec."))) %>%
+  group_by(site) %>%
+  summarise(tot_count = sum(abundance))
 ```
 
 Now we make three dataframes.
@@ -259,6 +268,17 @@ for(g in names(specablist)){
   
   dissimlist[[g]] <- vegdist(df, method = "bray")
 }
+
+# add one for df_sitestum w/o GL and CL, and w/o assemblages with less than 5 individuals in total (after removing _spec. entries)
+df <- specablist[["df_sitesum_FOFF"]] %>%
+  # add information on total number of individuals
+  rownames_to_column(var = "site") %>%
+  left_join(tot_count) %>%
+    # keep only those rows where the total sum of individuals is >= 5
+    filter(tot_count >= 5) %>%
+  select(!tot_count) %>%
+  column_to_rownames(var = "site")
+dissimlist[["df_sitestum_FOFF_5"]] <- vegdist(df, method = "bray")
 
 saveRDS(dissimlist, "dissimlist.rds")
 ```
