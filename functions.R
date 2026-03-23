@@ -1339,7 +1339,7 @@ myNMDS <- function(df, NMDS_res, info = codes_info){
     geom_point(size = 1.8) + # before hull to have dots below hulls
     # geom_text_repel(data=data_scores,aes(x=MDS1,y=MDS2,label=code),size=2, hjust=0, vjust=0) +
     geom_mark_hull(aes(fill = landuse), expand = unit(2.5,  "mm"),
-                   concavity = 2.5) + # expand: border of hull around dots
+                   concavity = 2) + # expand: border of hull around dots
     geom_point(data= centroids, aes(x = mean1, y=mean2, bg=landuse), size = 2.2, pch = 21, stroke=0.8, col="black") +
     annotate(geom = "label", 
              x = min(data_scores$MDS1) + 

@@ -86,9 +86,9 @@ for(m in names(dissimlist)){
 
 saveRDS(NMDSreslist, "NMDSreslist.rds")
 
-# ggsave("NMDSplot.svg", NMDS_plots[["df_sitesum"]], width = 16, height = 8)
-# ggsave("NMDSplotFOFF.svg", NMDS_plots[["df_sitesum_FOFF"]], width = 8, height = 8)
-ggsave("NMDSplotFOFF_5.svg", NMDS_plots[["df_sitesum_FOFF_5"]], width = 8, height = 8)
+ggsave("Figures/NMDSplot.svg", NMDS_plots[["df_sitesum"]], width = 16, height = 8) # this one would need a higher concavity of the hulls (cf. functions.R)
+ggsave("Figures/NMDSplotFOFF.svg", NMDS_plots[["df_sitesum_FOFF"]], width = 8, height = 8) # 11 food forest and 11 forest sites
+ggsave("Figures/NMDSplotFOFF_5.svg", NMDS_plots[["df_sitesum_FOFF_5"]], width = 8, height = 8) # 8 food forest and 8 forest sites
 ```
 
 # Indicator species
