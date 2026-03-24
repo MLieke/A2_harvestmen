@@ -495,7 +495,9 @@ model <- glmmTMB(D1 ~ landuse,
                   family = tweedie,
                   data = div)
 plot(simulateResiduals(model)) # looks OK!
-#r2(model) 
+
+library(rcompanion)
+nagelkerke(model)
 ```
 
 ```{r D1_model_bootstrap}
