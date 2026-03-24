@@ -420,6 +420,7 @@ write.csv(tbl_total, "speciestable_total.csv")
 # for now only doing it for case with
 # only food forest and forest sites
 # only sites with at least 5 individuals in total (8 FF sites, 8 FO sites)
+# not including location, because this doesn't work (several locations with just one site)
 betadisper_output <- data.frame()
 
   set.seed(2983847)
@@ -444,14 +445,11 @@ betadisper_output <- data.frame()
                          digits = 1))
     p_lu <- permutest(disper_lu)$tab$`Pr(>F)`[1]
 
-    disper_loc <- betadisper(dissim, dissim_info$location, type="centroid")
-    F_loc <- round(permutest(disper_loc)$tab$`F`[1], digits = 1)
-    p_loc <- permutest(disper_loc)$tab$`Pr(>F)`[1]
     output <- cbind( 
                     contrast = "Forest",
                     n_FF = n_obs %>% filter(landuse == "Food_forest") %>% pull(),
                     n_CON = n_obs %>% filter(landuse == "Forest") %>% pull(),
-                    F_loc, p_loc, FF, CON, F_lu, p_lu
+                     FF, CON, F_lu, p_lu
                     )
     betadisper_output <- rbind(betadisper_output, output)
 
@@ -481,35 +479,20 @@ permanova_output <- data.frame()
             { df[.,.] }
       dissim_info <- rn %>% filter(landuse=="Food_forest"|landuse==l)
       
-      results <- adonis2(dissim ~ location + landuse, 
+      results <- adonis2(dissim ~ landuse, 
                           data = dissim_info, by="terms")
       
-      results_loc <- results[1,] %>%
+      results_lu <- results[1,] %>%
         rename("p" = "Pr(>F)",
                "pseudo_F" = "F") %>%
-        mutate(df = paste0(Df, ", ", results[4,1]),
-               p_adj = p.adjust(p, method = "holm", n = nrow(n_obs) - 1)) %>%
-        select(df, pseudo_F, p_adj, R2)
+        mutate(df = paste0(Df, ", ", results[3,1])) %>%
+        select(df, pseudo_F, p, R2)
       
-      results_lu <- results[2,] %>%
-        rename("p" = "Pr(>F)",
-               "pseudo_F" = "F") %>%
-        mutate(df = paste0(Df, ", ", results[4,1]),
-               p_adj = p.adjust(p, method = "holm", n = nrow(n_obs) - 1)) %>%
-        select(df, pseudo_F, p_adj, R2)
       
-      output <- rbind(results_loc, results_lu) %>%
-        rownames_to_column("term") %>%
-        mutate(group = m,
-               contrast = l,
-               .before = "term")
-      
-      permanova_output <- rbind(permanova_output, round_df(output,digits=3))
+      permanova_output <- rbind(permanova_output, round_df(results_lu,digits=3))
 
     }
   
-
- 
 flextable(permanova_output)
 write.csv(permanova_output, "PERMANOVA_output.csv")
 ```
