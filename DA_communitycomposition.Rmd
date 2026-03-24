@@ -100,7 +100,7 @@ set.seed(2983847)
     # temporary for figure
     labs(x = "NMDS1", y = "NMDS2")
   
-  # NMDS_plots[[m]] <- p
+ggsave("Figures/NMDSplotFOFF_5_loc.svg", p, width = 8, height = 8) # 8 food forest and 8 forest sites
 ```
 
 # Indicator species
