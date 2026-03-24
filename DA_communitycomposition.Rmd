@@ -69,7 +69,6 @@ NMDSreslist <- list() # will be chill to have this saved instead of having to re
 
 for(m in names(dissimlist)){
   df <- dissimlist[[m]]
-    # remove croplands and grasslands
   set.seed(2983847)
   NMDS_res <- metaMDS(df, k = 2, trymax = 999, trace = FALSE) 
   # autotransform by default TRUE
@@ -89,6 +88,19 @@ saveRDS(NMDSreslist, "NMDSreslist.rds")
 ggsave("Figures/NMDSplot.svg", NMDS_plots[["df_sitesum"]], width = 16, height = 8) # this one would need a higher concavity of the hulls (cf. functions.R)
 ggsave("Figures/NMDSplotFOFF.svg", NMDS_plots[["df_sitesum_FOFF"]], width = 8, height = 8) # 11 food forest and 11 forest sites
 ggsave("Figures/NMDSplotFOFF_5.svg", NMDS_plots[["df_sitesum_FOFF_5"]], width = 8, height = 8) # 8 food forest and 8 forest sites
+```
+
+```{r NMDS_loc}
+set.seed(2983847)
+  NMDS_res <- NMDSreslist[["df_sitesum_FOFF_5"]] 
+  df <- dissimlist[["df_sitesum_FOFF_5"]]
+  # autotransform by default TRUE
+  
+  p <- myNMDS_loc(df, NMDS_res, codes_info) + 
+    # temporary for figure
+    labs(x = "NMDS1", y = "NMDS2")
+  
+  # NMDS_plots[[m]] <- p
 ```
 
 # Indicator species
@@ -399,84 +411,68 @@ tbl_total <- readRDS("harvestmen.rds") %>%
 write.csv(tbl_total, "speciestable_total.csv")
 ```
 
-<!--
+
 ## PERMDISP and PERMANOVA
 
 ### 3 betadispers
 
 ```{r PERMDISP}
-# first for groups considered in main (pooled microarthropods and pooled macroarthropods)
-# but also for separate groups
-
+# for now only doing it for case with
+# only food forest and forest sites
+# only sites with at least 5 individuals in total (8 FF sites, 8 FO sites)
 betadisper_output <- data.frame()
-dmlist <- dmlist[grouporder_total]
 
-for(m in names(dmlist)){
   set.seed(2983847)
-  df <- as.matrix(dmlist[[m]])
+  df <- as.matrix(dissimlist[["df_sitesum_FOFF_5"]])
   rn <- data.frame(code = rownames(df)) %>%
     left_join(codes_info %>% select(code, landuse, location))
   
   n_obs <- rn %>%
     group_by(landuse) %>%
-    summarise(n = n()) %>%
-    # now already remove land use type for which there are less than 6 observations
-    filter(n >= 6)
-
-  for(l in setdiff(n_obs$landuse, "Food_forest")){ # only for those reference land use types with >= 6 obs.
+    summarise(n = n())
+  
     dissim <- rn %>%
-        filter(landuse %in% c("Food_forest",l)) %>%
+        filter(landuse %in% c("Food_forest", "Forest")) %>%
         pull(code) %>%
       { df[.,.] } %>%
       as.dist()
-    dissim_info <- rn %>% filter(landuse=="Food_forest"|landuse==l)
+    dissim_info <- rn %>% filter(landuse %in% c("Food_forest", "Forest"))
     disper_lu <- betadisper(dissim, dissim_info$landuse, type="centroid")
     FF <- round(disper_lu$group.distances[["Food_forest"]], digits=2)
-    CON <- round(disper_lu$group.distances[[l]], digits=2)
+    CON <- round(disper_lu$group.distances[["Forest"]], digits=2)
     F_lu <- format(round(permutest(disper_lu)$tab$`F`[1], 
                          digits = 1))
-    p_lu <- p.adjust(permutest(disper_lu)$tab$`Pr(>F)`[1],
-                     method="holm", n = nrow(n_obs) - 1) # the number of comparisons made (FF vs ...)
+    p_lu <- permutest(disper_lu)$tab$`Pr(>F)`[1]
+
     disper_loc <- betadisper(dissim, dissim_info$location, type="centroid")
     F_loc <- round(permutest(disper_loc)$tab$`F`[1], digits = 1)
-    p_loc <- p.adjust(permutest(disper_loc)$tab$`Pr(>F)`[1], 
-                      method="holm", n = nrow(n_obs) - 1) # idem above
-    
-    output <- cbind(group = m, 
-                    contrast = l,
+    p_loc <- permutest(disper_loc)$tab$`Pr(>F)`[1]
+    output <- cbind( 
+                    contrast = "Forest",
                     n_FF = n_obs %>% filter(landuse == "Food_forest") %>% pull(),
-                    n_CON = n_obs %>% filter(landuse == l) %>% pull(),
+                    n_CON = n_obs %>% filter(landuse == "Forest") %>% pull(),
                     F_loc, p_loc, FF, CON, F_lu, p_lu
                     )
     betadisper_output <- rbind(betadisper_output, output)
-      }
-}
 
 
 flextable(betadisper_output)
 write.csv(betadisper_output, "PERMDISP_output.csv")
 ```
 
-Based on the results of the PERMDISP, we can perform all PERMANOVAs for the main groups. In a few cases there is the combination of a difference in the number of observations and dispersion between the two land use types, but then the dispersion is always greater in the group with the highest number of observations (FF), so there is a conservative bias, and yet we still detect differences, so OK; see supplement.
-
-For the separate arthropod groups, there was never a statistically clear difference in dispersion between FF and the reference land use type, so all according separate PERMANOVAs can be conducted.
-
 ### 3 permanovas
 
 ```{r PERMANOVA}
 permanova_output <- data.frame()
 
-for(m in names(dmlist)){
   set.seed(2983847)
-  df <- as.matrix(dmlist[[m]])
+  df <- as.matrix(dissimlist[["df_sitesum_FOFF_5"]])
   rn <- data.frame(code = rownames(as.matrix(df))) %>%
     left_join(codes_info %>% select(code, landuse, location))
   
   n_obs <- rn %>%
     group_by(landuse) %>%
-    summarise(n = n()) %>%
-    # now already remove land use type for which there are less than 6 observations
-    filter(n >= 6)
+    summarise(n = n()) 
 
   for(l in setdiff(n_obs$landuse, "Food_forest")){ # only for those reference land use types with >= 6 obs.
       dissim <- rn %>%
@@ -512,7 +508,7 @@ for(m in names(dmlist)){
 
     }
   
-}
+
  
 flextable(permanova_output)
 write.csv(permanova_output, "PERMANOVA_output.csv")

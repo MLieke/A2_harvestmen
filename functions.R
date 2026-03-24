@@ -1364,6 +1364,65 @@ myNMDS <- function(df, NMDS_res, info = codes_info){
     scale_fill_manual(values = pal_okabe_ito_NMDS)
 }
 
+myNMDS_loc <- function(df, NMDS_res, info = codes_info){
+  # works for input (df) of community dataframe and distance/dissimilarity matrix
+  
+  data_scores <- as.data.frame(NMDS_res[["points"]]) %>%
+    rownames_to_column(var = "code") %>%
+    left_join(codes_info) %>%
+    # to have FF on top for points
+    arrange(desc(landuse)) %>%
+    # to have order of layering FO < FF < GL < AF for hulls
+    mutate(landuse = factor(landuse, levels = c("Forest", "Food_forest",
+                                                "Grassland", "Arable_field")))
+  
+  # species scores only exist if input was community matrix (so not of class "dist")
+  if(is.data.frame(df)){
+    species_scores <- as.data.frame(scores(NMDS_res, "species"))
+    species_scores$species <- rownames(species_scores)
+  }
+  
+  # For the polygons/hulls
+  hull_data <- data.frame()
+  for(k in c("Food_forest", "Forest", "Grassland", "Arable_field")){
+    x <- data_scores[data_scores$landuse == k, ][chull(data_scores[data_scores$landuse ==
+                                                                     k, c("MDS1", "MDS2")]), ]
+    hull_data <- rbind(hull_data, x)
+  }
+  
+  # For the centroids
+  centroids <- data_scores %>% group_by(landuse) %>% summarize(mean1=mean(MDS1), mean2=mean(MDS2))
+  
+  p <- ggplot(data = data_scores, aes(x = MDS1, y = MDS2,
+                                      colour = landuse)) +
+    geom_point(size = 1.8, aes(shape = location)) + # before hull to have dots below hulls
+    # geom_text_repel(data=data_scores,aes(x=MDS1,y=MDS2,label=code),size=2, hjust=0, vjust=0) +
+    scale_shape_manual(values = c(0,1,2,3,4,5,6,7,8,9,10,11)) +
+    geom_mark_hull(aes(fill = landuse), expand = unit(2.5,  "mm"),
+                   concavity = 2) + # expand: border of hull around dots
+    geom_point(data= centroids, aes(x = mean1, y=mean2, bg=landuse), size = 2.2, pch = 21, stroke=0.8, col="black") +
+    annotate(geom = "label", 
+             x = min(data_scores$MDS1) + 
+               ((max(data_scores$MDS1) - min(data_scores$MDS1))/4), 
+             y = max(data_scores$MDS2) + 
+               ((max(data_scores$MDS2) - min(data_scores$MDS2))/4), 
+             size = 5,
+             label = paste("Stress: ", 
+                           round(NMDS_res$stress, digits = 3))) +
+    theme_minimal(base_size = 16) +
+    theme(legend.position = "none",
+          panel.grid.major = element_line(size = 0.5), 
+          panel.grid.minor = element_line(size = 0.5),
+          panel.border = element_rect(colour = "black", 
+                                      fill = NA, size = 0.5)) +
+    # to make the plot a bit lower than the lowest point and higher than the stress label
+    scale_y_continuous(limits = c(min(data_scores$MDS2) - 
+                                    ((max(data_scores$MDS2) - min(data_scores$MDS2))/12),
+                                  max(data_scores$MDS2) + 
+                                    ((max(data_scores$MDS2) - min(data_scores$MDS2))/3))) + 
+    scale_colour_manual(values = pal_okabe_ito_NMDS) + 
+    scale_fill_manual(values = pal_okabe_ito_NMDS)
+}
 
 # Round of numbers in dataframe -------------------------------------------
 
