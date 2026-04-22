@@ -39,7 +39,7 @@ First, we complete the data with zeroes for organism groups that were sampled in
 ```{r data}
 # read in raw dataframe of harvestmen
 
-harvestmen_raw <- read.csv("Data/Harvestmen_P2.csv") %>%
+harvestmen_raw <- read.csv("Data/Harvestmen.csv") %>%
   select(!c(Stage, Sex)) %>%
   as.data.frame() %>%
   # change from all caps to normal
@@ -66,6 +66,15 @@ harvestmen <- harvestmen_raw %>%
 
 # save
 saveRDS(harvestmen, "harvestmen.rds")
+
+# calculate total number of individuals per site (sum of traps, without averaging across sessions), excluding _spec. (except for Leiobunum spec.)
+tot_count <- harvestmen %>%
+      # filter out all spec. entries except for Leiobunum_spec.
+    filter(!(species %in% c("Phalangiidae_spec.",
+                            "Nemastomatidae_spec.", 
+                            "Nemastoma_spec."))) %>%
+  group_by(site) %>%
+  summarise(tot_count = sum(abundance))
 ```
 
 Now we make three dataframes.
@@ -126,6 +135,12 @@ dflist <- list("df_trap" = harvestmen_trap,
                "df_sitesum" = harvestmen_sitesum,
                "df_sitemean" = harvestmen_sitemean)
 
+# add one for df_sitesum that doesn't include grasslands and croplands
+dflist[["df_sitesum_FOFF"]] <- dflist[["df_sitesum"]] %>%
+  left_join(codes_info) %>%
+  filter(landuse %in% c("Food_forest", "Forest")) %>%
+  select(!c(location, landuse, site)) 
+
 # save
 saveRDS(dflist, "dflist.rds")
 ```
@@ -180,33 +195,36 @@ for(m in names(dflist)){
                                                 "Arable_field")))
 }
 
-saveRDS(dflist, "quantitylist.rds")
+saveRDS(quantlist, "quantitylist.rds")
 ```
 
 ## Species-abundance matrices
 
 Here, the harvestmen count data is transformed into species-abundance matrices.
 
+For the analysis of the diversity and community composition, juveniles that were unidentified at the species level were excluded, except for Leiobunum_spec. because of these we were sure that they were an extra species not yet present in the samples.
 ```{r specab}
 specablist <- list()
 
 for(m in names(dflist)) {
   specablist[[m]] <- dflist[[m]] %>% 
+    # filter out all spec. entries except for Leiobunum_spec.
+    filter(!(species %in% c("Phalangiidae_spec.",
+                            "Nemastomatidae_spec.", 
+                            "Nemastoma_spec."))) %>%
     # make species-abundance matrix
     pivot_wider(names_from = species,
                 values_from = count) %>%
-  # remove empty communities (necessary for NMDS and PERMANOVA) 
-  # for now we don't yet remove all communities that have less than 5 individuals, we just keep all non-empty communities in
-    column_to_rownames(var = "code") %>%
-    # keep only those rows where the total sum of individuals is > 0 (could be set to different threshold later on)
-    filter(rowSums(across(where(is.numeric))) > 0) 
+    column_to_rownames(var = "code")
 }
+
 
 saveRDS(specablist, "specablist.rds")
 ```
 
 ## Diversity
 
+As this is based on the specablists, the _spec. entries are already removed.
 ```{r diversitylist}
 diversitylist <- list()
 
@@ -243,13 +261,30 @@ Here we produce the Bray-Curtis dissimilarity matrices.
 dissimlist <- list() 
 
 for(g in names(specablist)){
-  dissimlist[[g]] <- vegdist(specablist[[g]], method = "bray")
+  df <- specablist[[g]] %>%
+    # remove empty communities
+    # keep only those rows where the total sum of individuals is > 0 (could be set to different threshold later on)
+    filter(rowSums(across(where(is.numeric))) > 0)
+  
+  dissimlist[[g]] <- vegdist(df, method = "bray")
 }
+
+# add one for df_sitestum w/o GL and CL, and w/o assemblages with less than 5 individuals in total (after removing _spec. entries)
+df <- specablist[["df_sitesum_FOFF"]] %>%
+  # add information on total number of individuals
+  rownames_to_column(var = "site") %>%
+  left_join(tot_count) %>%
+    # keep only those rows where the total sum of individuals is >= 5
+    filter(tot_count >= 5) %>%
+  select(!tot_count) %>%
+  column_to_rownames(var = "site")
+dissimlist[["df_sitesum_FOFF_5"]] <- vegdist(df, method = "bray")
 
 saveRDS(dissimlist, "dissimlist.rds")
 ```
 
-
+    
+    
 ## Compute average pairwise dissimilarity per study site (for beta-diversity)
 
 Not done for this A2 paper.
