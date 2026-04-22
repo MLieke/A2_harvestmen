@@ -1395,7 +1395,7 @@ myNMDS_loc <- function(df, NMDS_res, info = codes_info){
   
   p <- ggplot(data = data_scores, aes(x = MDS1, y = MDS2,
                                       colour = landuse)) +
-    geom_point(size = 1.8, aes(shape = location)) + # before hull to have dots below hulls
+    geom_point(size = 1.8, aes(shape = location_nr)) + # before hull to have dots below hulls
     # geom_text_repel(data=data_scores,aes(x=MDS1,y=MDS2,label=code),size=2, hjust=0, vjust=0) +
     scale_shape_manual(values = c(0,1,2,3,4,5,6,7,8,9,10,11)) +
     geom_mark_hull(aes(fill = landuse), expand = unit(2.5,  "mm"),
